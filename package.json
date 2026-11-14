@@ -1,0 +1,38 @@
+{
+  "name": "zoom-rooms-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for Zoom Rooms: room status, health, open issues and devices, with a demo mode that needs no Zoom account.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Pablo Garcia Pizano",
+  "keywords": ["mcp", "model-context-protocol", "zoom", "zoom-rooms", "av", "audio-visual"],
+  "bin": {
+    "zoom-rooms-mcp": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.ts",
+    "start": "node dist/cli.js",
+    "demo": "node dist/cli.js --demo",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.9.3"
+  }
+}
