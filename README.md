@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server for **Zoom Rooms**. Ask Claude, Cursor, or any MCP client "which rooms have problems right now?" and get an answer from your Zoom account: room status, health, open issues and the devices in each room.
 
-- **Read-only by design.** All 3 tools are annotated `readOnlyHint: true`. Nothing changes in Zoom.
+- **Read-only by design.** All 4 tools are annotated `readOnlyHint: true`. Nothing changes in Zoom.
 - **Runs without an account.** `--demo` serves a fictional 32-room campus, so you can try it before you have credentials. With no credentials set it starts in demo mode on its own.
 - **Local and simple.** One stdio server you run yourself. No website, no hosted service, no sign-in.
 - **Per-account token cache.** Server-to-Server OAuth tokens are cached per account and client, never shared across credentials.
@@ -63,6 +63,7 @@ If only some of the three are set, the server refuses to start and names what is
 
 | Tool | Zoom API | Returns |
 |---|---|---|
+| `get_rooms_needing_attention` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for each problem room | Start here: problem rooms worst first, with open issues, devices not online, whether a meeting is running now, and a plain next step. Never an all-clear while something could not be read |
 | `list_zoom_rooms` | `GET /rooms` | Every room with status and health |
 | `get_zoom_room` | `GET /rooms/{roomId}` | One room's details and open issues |
 | `get_zoom_room_devices` | `GET /rooms/{roomId}/devices` | Cameras, mics, speakers, controllers, displays |
