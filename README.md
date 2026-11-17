@@ -68,6 +68,10 @@ If only some of the three are set, the server refuses to start and names what is
 | `get_zoom_room` | `GET /rooms/{roomId}` | One room's details and open issues |
 | `get_zoom_room_devices` | `GET /rooms/{roomId}/devices` | Cameras, mics, speakers, controllers, displays |
 
+In hosts that support MCP Apps (Claude, ChatGPT), `get_rooms_needing_attention` also shows a card: each problem room worst first with its issues, the devices not online, an "in a meeting" flag and the next step. The card copies the tool result and loads nothing from the network. Other hosts get the same text and JSON as before.
+
+![Rooms needing attention card on the demo campus](docs/card-attention.png)
+
 Each result has the raw JSON as text plus `structuredContent: { source: "zoom" | "demo", data }`. Unknown rooms come back as a clean tool error.
 
 ## Development

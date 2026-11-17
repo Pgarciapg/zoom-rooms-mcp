@@ -33,6 +33,8 @@ export interface Attention {
   needAttention: number;
   counts: Record<Level, number>;
   rooms: AttentionRoom[];
+  /** Problem rooms past the detail limit: counted and named, not read in detail. */
+  notReadInDetail: string[];
   couldNotCheck: string[];
   allClear: boolean;
 }
@@ -83,7 +85,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     rooms = roomsOf(await client.listRooms());
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };
+    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };
   }
 
   const unknownHealth = rooms.filter((r) => !levelOf(r) && !/^healthy$/i.test(str(r.health)));
@@ -124,6 +126,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
 
   const counts = { critical: problems.filter((p) => p.level === "critical").length, warning: problems.filter((p) => p.level === "warning").length };
   const hidden = problems.length - detailed.length;
+  const notReadInDetail = problems.slice(limit).map((p) => str(p.r.name) || str(p.r.id));
   const allClear = problems.length === 0 && couldNotCheck.length === 0;
   const lines: string[] = [];
   if (allClear) lines.push(`All ${rooms.length} rooms are healthy and none is offline.`);
@@ -138,8 +141,8 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);
       lines.push(`   Next: ${room.next}`);
     });
-    if (hidden > 0) lines.push(`${hidden} more problem room${hidden === 1 ? "" : "s"} not read in detail: ${problems.slice(limit).map((p) => str(p.r.name) || str(p.r.id)).join(", ")}.`);
+    if (hidden > 0) lines.push(`${hidden} more problem room${hidden === 1 ? "" : "s"} not read in detail: ${notReadInDetail.join(", ")}.`);
   }
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
-  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, couldNotCheck, allClear };
+  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear };
 };
