@@ -52,7 +52,7 @@ test("three room computers offline on one floor within minutes: one location gro
   assert.equal(p.title, "3 room computers offline on Building 1, 4th Floor, last online within 7 min of each other");
   assert.deepEqual(p.rooms, ["A", "B", "C"]);
   assert.match(p.check, /network switch and power that serve Building 1, 4th Floor/);
-  assert.match(d.summary, /1 shared cause found; start with: 3 room computers offline on Building 1, 4th Floor/);
+  assert.match(d.summary, /1 shared cause found across the rooms; start with: 3 room computers offline on Building 1, 4th Floor/);
 });
 
 test("offline rooms on one floor hours apart are still grouped, without the same-event claim", async () => {
@@ -117,7 +117,7 @@ test("all healthy is a real all-clear and diagnoses nothing", async () => {
   const d = await diagnoseRooms(account([row("a", "Available", "Healthy")], {}, {}, { getRoom: async () => { detailCalls++; return {}; } }), NOW);
   assert.equal(d.allClear, true);
   assert.equal(detailCalls, 0);
-  assert.equal(d.summary, "All 1 rooms are healthy and none is offline.");
+  assert.equal(d.summary, "The 1 room is healthy and not offline.");
 });
 
 test("the detail cap names the rest, and the room list is read only once", async () => {
@@ -143,4 +143,78 @@ test("over MCP: read-only, plain text, structured result", async () => {
   assert.match(r.content[0].text, /^3 of 32 rooms need attention/);
   assert.equal(r.structuredContent.view, "rooms-diagnosis");
   assert.equal(r.structuredContent.source, "demo");
+});
+
+// Regressions from the adversarial review (2026-11-20).
+const off = (id: string, location: unknown, last = "2026-03-28T09:20:00Z") => detail(id, { location, last_online: last });
+
+test("review: rooms past the limit or unread are named in the no-shared-cause line", async () => {
+  const rows = ["a", "b", "c"].map((id) => row(id, "Offline", "Critical"));
+  const details = { a: off("a", floor4), b: off("b", floor4), c: off("c", floor4) };
+  const d = await diagnoseRooms(account(rows, details, { a: ok, b: ok, c: ok }), NOW, 1);
+  assert.match(d.summary, /No shared cause among the 1 room diagnosed: .* 2 problem rooms could not be included \(2 past the limit\), so a shared cause involving them would not show here\./);
+});
+
+test("review: a room listed twice counts once", async () => {
+  const rows = [row("a", "Offline", "Critical"), row("a", "Offline", "Critical")];
+  const d = await diagnoseRooms(account(rows, { a: off("a", floor4) }, { a: ok }), NOW);
+  assert.equal(d.needAttention, 1);
+  assert.deepEqual(d.patterns, []);
+});
+
+test("review: partial locations never group; case and spacing do not split a place; text and id locations work", async () => {
+  const partial = await diagnoseRooms(account([row("a", "Offline", "Critical"), row("b", "Offline", "Critical")], { a: off("a", { floor: "2nd Floor" }), b: off("b", { floor: "2nd Floor" }) }, { a: ok, b: ok }), NOW);
+  assert.deepEqual(partial.patterns, []);
+  const cased = await diagnoseRooms(account([row("a", "Offline", "Critical"), row("b", "Offline", "Critical")], { a: off("a", { building: "HQ", floor: "2nd Floor" }), b: off("b", { building: "hq", floor: "2nd  floor" }) }, { a: ok, b: ok }), NOW);
+  assert.equal(cased.patterns.length, 1);
+  const text = await diagnoseRooms(account([row("a", "Offline", "Critical"), row("b", "Offline", "Critical")], { a: off("a", "HQ 2nd"), b: off("b", "HQ 2nd") }, { a: ok, b: ok }), NOW);
+  assert.match(text.patterns[0]!.title, /offline on HQ 2nd/);
+  const listId = await diagnoseRooms(account([{ ...row("a", "Offline", "Critical"), location_id: "L1" }, { ...row("b", "Offline", "Critical"), location_id: "L1" }], { a: off("a", {}), b: off("b", {}) }, { a: ok, b: ok }), NOW);
+  assert.match(listId.patterns[0]!.title, /offline on L1/);
+});
+
+test("review: model groups need real failures, a real model name, matching firmware, and skip offline rooms", async () => {
+  const two = (devA: any, devB: any, status = "Available", health = "Warning") =>
+    diagnoseRooms(account([row("a", status, health), row("b", status, health)], { a: off("a", { building: "X", floor: "1" }), b: off("b", { building: "Y", floor: "2" }) }, { a: [devA], b: [devB] }), NOW);
+  const rally = (extra: any) => ({ name: "Logitech Rally", device_type: "Camera", status: "Disconnected", ...extra });
+  assert.doesNotMatch((await two(rally({ firmware: "1.0" }), rally({}))).patterns[0]!.title, /all on firmware/);
+  assert.deepEqual((await two(rally({ status: "Updating" }), rally({ status: "Updating" }))).patterns, []);
+  assert.ok(!(await two(rally({}), rally({}), "Offline", "Critical")).patterns.some((p) => p.kind === "same-model"));
+  const cam1 = { name: "Camera 1", device_type: "Camera", status: "Offline", firmware: "1.0" };
+  assert.ok(!(await two(cam1, { ...cam1, firmware: "9.9" })).patterns.some((p) => p.kind === "same-model"));
+  const na = await two({ name: "Logitech Rally", device_type: "Camera", status: "Offline", firmware: "N/A" }, { name: "Poly Studio", device_type: "Camera", status: "Offline", firmware: "N/A" });
+  assert.ok(!na.patterns.some((p) => p.kind === "same-firmware"));
+  const cased = await two(rally({}), rally({ name: "logitech  rally" }));
+  assert.deepEqual(cased.patterns.map((p) => p.kind), ["same-model"]);
+});
+
+test("review: two rooms with the same name are still two rooms", async () => {
+  const rally = [{ name: "Logitech Rally", device_type: "Camera", status: "Disconnected" }];
+  const rows = [{ ...row("1", "Available", "Warning"), name: "Huddle" }, { ...row("2", "Available", "Warning"), name: "Huddle" }];
+  const d = await diagnoseRooms(account(rows, { 1: detail("1", { name: "Huddle" }), 2: detail("2", { name: "Huddle" }) }, { 1: rally, 2: rally }), NOW);
+  assert.deepEqual(d.patterns[0]?.roomIds, ["1", "2"]);
+});
+
+test("review: 'Microsoft' and 'Michigan' are not microphones", async () => {
+  const rows = [row("a", "Available", "Warning"), row("b", "Available", "Warning")];
+  const details = { a: detail("a", { issues: [{ issue: "Microsoft Teams sign-in failed", severity: "warning" }] }), b: detail("b", { issues: [{ issue: "Michigan dial plan error", severity: "warning" }] }) };
+  const d = await diagnoseRooms(account(rows, details, { a: ok, b: ok }), NOW);
+  assert.deepEqual(d.patterns, []);
+});
+
+test("review: more pages, unreadable list entries, or an odd status block the all-clear", async () => {
+  const healthy = row("a", "Available", "Healthy");
+  const paged = await diagnoseRooms({ ...account([healthy], {}, {}), listRooms: async () => ({ rooms: [healthy], next_page_token: "abc" }) }, NOW);
+  assert.equal(paged.allClear, false);
+  assert.ok(paged.couldNotCheck.includes("Room list: Zoom has more pages of rooms and only the first was read."));
+  const junk = await diagnoseRooms(account([healthy, null, "x"], {}, {}), NOW);
+  assert.equal(junk.allClear, false);
+  assert.ok(junk.couldNotCheck.includes("Room list: 2 entries could not be read."));
+  const odd = await diagnoseRooms(account([row("a", "Unknown", "Healthy")], {}, {}), NOW);
+  assert.equal(odd.allClear, false);
+});
+
+test("review: grammar for one room", async () => {
+  const d = await diagnoseRooms(account([row("a", "Available", "Warning")], { a: detail("a") }, { a: ok }), NOW);
+  assert.match(d.summary, /^1 of 1 room needs attention\./);
 });

@@ -31,6 +31,8 @@ export interface RoomFacts {
   id: string;
   name: string;
   where: string | null;
+  /** Lowercased place key for grouping rooms: building and floor (both known), or a location id or text. Null if partial or missing. */
+  placeKey: string | null;
   status: string;
   health: string;
   inMeeting: boolean;
@@ -54,9 +56,9 @@ const msg = (error: unknown): string => (error instanceof Error ? error.message 
 const OK_DEVICE = /^(online|connected|available|in ?use)$/i;
 const KNOWN_HEALTH = /^(healthy|warning|critical)$/i;
 /** Room computer states that mean it is up. Offline is a finding; anything else could not be classed. */
-const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
+export const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
 /** Words that say something has stopped working. An issue joins a failing device only when it says one of these. */
-const FAILURE = /offline|disconnect|not detected|no signal|not responding|unreachable|down\b|fail|error|lost/i;
+export const FAILURE = /offline|disconnect|not detected|no signal|not responding|unreachable|down\b|fail|error|lost/i;
 const RESOLVED = /^(resolved|closed|cleared|fixed)$/i;
 
 /** Device kinds an issue text can name, keyed by the words that name them. */
@@ -134,13 +136,27 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const room: RoomFacts = {
     id: str(detail?.id) || str(listed?.id) || roomId,
     name: str(detail?.name) || str(listed?.name) || roomId,
-    where: loc && typeof loc === "object" ? [str(loc.building), str(loc.floor)].filter(Boolean).join(", ") || null : str(listed?.location_id ?? detail?.location_id) || null,
+    where: null,
+    placeKey: null,
     status: str(detail?.status) || str(listed?.status),
     health: str(detail?.health) || str(listed?.health),
     inMeeting: false,
     lastOnline: detail?.last_online ? str(detail.last_online) : null,
   };
   room.inMeeting = /in ?meeting/i.test(room.status);
+  // Where the room is. A building without a floor (or the reverse) is shown but never used to group rooms.
+  const building = isObj(loc) ? str(loc.building) : "";
+  const floorName = isObj(loc) ? str(loc.floor) : "";
+  const locId = str(detail?.location_id) || str(listed?.location_id);
+  const locText = typeof loc === "string" ? str(loc) : "";
+  const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
+  if (building && floorName) {
+    room.where = `${building}, ${floorName}`;
+    room.placeKey = key(room.where);
+  } else if (locText || locId) {
+    room.where = locText || locId;
+    room.placeKey = key(room.where);
+  } else room.where = [building, floorName].filter(Boolean).join(", ") || null;
   const offline = room.status.toLowerCase() === "offline";
   if (!offline && !UP_STATUS.test(room.status)) couldNotCheck.push(`Status: "${room.status || "not reported"}", so the room computer could not be classed as up.`);
   if (!KNOWN_HEALTH.test(room.health)) couldNotCheck.push(`Health: "${room.health || "not reported"}", so the room could not be classed as healthy.`);
