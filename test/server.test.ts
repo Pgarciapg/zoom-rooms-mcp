@@ -17,12 +17,12 @@ const connect = async () => {
 const call = async (client: Client, name: string, args: Record<string, unknown> = {}) =>
   (await client.callTool({ name, arguments: args })) as Result;
 
-test("lists exactly the six tools, all read-only", async () => {
+test("lists exactly the seven tools, all read-only except what_changed", async () => {
   const client = await connect();
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [...TOOL_NAMES].sort());
   for (const tool of tools) {
-    assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
+    assert.equal(tool.annotations?.readOnlyHint, tool.name !== "what_changed", tool.name);
     assert.equal(tool.annotations?.destructiveHint, false, tool.name);
     assert.match(tool.description ?? "", /demo data/, "demo mode is disclosed in descriptions");
   }

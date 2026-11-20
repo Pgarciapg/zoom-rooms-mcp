@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server for **Zoom Rooms**. Ask Claude, Cursor, or any MCP client "which rooms have problems right now?" and get an answer from your Zoom account: room status, health, open issues and the devices in each room.
 
-- **Read-only by design.** All 6 tools are annotated `readOnlyHint: true`. Nothing changes in Zoom.
+- **Read-only toward Zoom.** Nothing changes in Zoom. Six of the 7 tools are annotated `readOnlyHint: true`; `what_changed` is not, only because it writes its own snapshot file on this computer.
 - **Runs without an account.** `--demo` serves a fictional 32-room campus, so you can try it before you have credentials. With no credentials set it starts in demo mode on its own.
 - **Local and simple.** One stdio server you run yourself. No website, no hosted service, no sign-in.
 - **Per-account token cache.** Server-to-Server OAuth tokens are cached per account and client, never shared across credentials.
@@ -56,6 +56,7 @@ Create a **Server-to-Server OAuth** app at [marketplace.zoom.us](https://marketp
 | `ZOOM_CLIENT_SECRET` | Client secret |
 | `ZOOM_CREDENTIALS_FILE` | Optional. A dotenv file holding the three values above. Environment variables win. |
 | `ZOOM_API_BASE_URL` | Optional. Defaults to `https://api.zoom.us/v2`. |
+| `ZOOM_ROOMS_STATE` | Optional. Where `what_changed` keeps its last check. |
 
 If only some of the three are set, the server refuses to start and names what is missing, so a typo never quietly drops you into demo mode.
 
@@ -64,6 +65,7 @@ If only some of the three are set, the server refuses to start and names what is
 | Tool | Zoom API | Returns |
 |---|---|---|
 | `get_rooms_needing_attention` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for each problem room | Start here: problem rooms worst first, with open issues, devices not online, whether a meeting is running now, and a plain next step. Never an all-clear while something could not be read |
+| `what_changed` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for rooms that look unhappy now or did last time (up to 25) | What changed since the last run: rooms offline or back, health worse or better, issues opened or closed, devices down or recovered, rooms added or removed, worst first. Saves one private file per account (`~/.zoom-rooms-mcp/last-check-<account fingerprint>.json`, mode 600; `ZOOM_ROOMS_STATE` moves it). First run says there is nothing to compare. Anything not read now or last time is "not compared", never fixed. Rooms are only called added or removed between two full room lists. Demo compares against a built-in day-earlier campus in memory |
 | `diagnose_rooms` | `GET /rooms`, then `diagnose_room` for each problem room | Shared causes across problem rooms: room computers offline on the same floor, one device model or firmware failing in several rooms, the same problem in several rooms. Worst first, one check each, then a per-room list. Never an all-clear while something could not be read |
 | `diagnose_room` | `GET /rooms/{roomId}` and `/devices` (plus `GET /rooms` if the detail lacks status or health) | Why one room is unhappy and what to check first: the room computer, each open issue and each device not online, an issue and its failing device joined into one finding, worst first, one check each. Never an all-clear while something could not be read |
 | `list_zoom_rooms` | `GET /rooms` (every page) | Every room with status and health. Reads all pages, up to 15,000 rooms; a page that fails fails the call, and past the cap the result keeps Zoom's `next_page_token` so it never passes as the whole list |

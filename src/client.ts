@@ -1,5 +1,5 @@
 import { getAccessToken, type ZoomCredentials } from "./auth.ts";
-import { MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
+import { EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
 
 /** The read-only Zoom Rooms calls the MCP tools need. */
 export interface ZoomRoomsClient {
@@ -111,5 +111,25 @@ export class DemoZoomRoomsClient implements ZoomRoomsClient {
         ],
       }
     );
+  }
+}
+
+/** The demo campus a day earlier: only for demo mode's saved previous check in what_changed. */
+export class EarlierDemoZoomRoomsClient implements ZoomRoomsClient {
+  private find(roomId: string) {
+    const room = EARLIER_ROOMS.rooms.find((r) => r.id === roomId);
+    if (!room) throw new ZoomApiError(404, `Room not found: ${roomId}.`);
+    return room;
+  }
+  async listRooms() {
+    return EARLIER_ROOMS;
+  }
+  async getRoom(roomId: string) {
+    const room = this.find(roomId);
+    return EARLIER_DETAILS[room.id] ?? { ...room, issues: [] };
+  }
+  async getRoomDevices(roomId: string) {
+    const room = this.find(roomId);
+    return EARLIER_DEVICES[room.id] ?? new DemoZoomRoomsClient().getRoomDevices(roomId);
   }
 }

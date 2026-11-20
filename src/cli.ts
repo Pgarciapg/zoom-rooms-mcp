@@ -2,6 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { DEFAULT_BASE_URL, DemoZoomRoomsClient, HttpZoomRoomsClient } from "./client.ts";
 import { loadCredentials } from "./credentials.ts";
+import { accountFingerprint } from "./changes.ts";
 import { createServer } from "./server.ts";
 import { SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
@@ -19,6 +20,7 @@ Environment (a Zoom Server-to-Server OAuth app with room read scopes):
   ZOOM_CLIENT_SECRET      Client secret
   ZOOM_CREDENTIALS_FILE   Optional dotenv file holding the three values above
   ZOOM_API_BASE_URL       Override the API base (default ${DEFAULT_BASE_URL})
+  ZOOM_ROOMS_STATE        Where what_changed keeps its last check (default ~/.zoom-rooms-mcp/last-check-<account>.json)
 
 With no credentials set, the server starts in demo mode.
 `;
@@ -40,6 +42,7 @@ if (!argv.includes("--demo") && !creds) console.error("No Zoom credentials set; 
 const server = createServer({
   client: demo ? new DemoZoomRoomsClient() : new HttpZoomRoomsClient(creds!, process.env.ZOOM_API_BASE_URL),
   source: demo ? "demo" : "zoom",
+  account: demo ? "demo" : accountFingerprint(creds!.accountId),
 });
 await server.connect(new StdioServerTransport());
 console.error(`${SERVER_NAME} ${SERVER_VERSION} running on stdio (${demo ? "demo" : "live Zoom"})`);

@@ -6,7 +6,8 @@ import { attentionCard } from "./card-model.ts";
 import { diagnoseRoom, diagnosisText } from "./diagnose.ts";
 import { diagnoseRooms } from "./diagnose-rooms.ts";
 import { CARD_HTML } from "./generated/card.ts";
-import type { ZoomRoomsClient } from "./client.ts";
+import { EarlierDemoZoomRoomsClient, type ZoomRoomsClient } from "./client.ts";
+import { compare, defaultSnapshotPath, FileSnapshotStore, MemorySnapshotStore, nextSnapshot, readAccount, type Snapshot, type SnapshotStore } from "./changes.ts";
 import { CARD_URI, SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
 export type Source = "zoom" | "demo";
@@ -16,7 +17,18 @@ export interface ServerOptions {
   source: Source;
   /** Built attention card HTML. Defaults to the bundled card; pass null to serve the tools without it. */
   cardHtml?: string | null;
+  /** Where what_changed keeps the last check. Default: demo keeps a seeded copy in memory; live a private file on this computer. */
+  snapshots?: SnapshotStore;
+  /** Fingerprint of the Zoom account (accountFingerprint), so two accounts are never compared. Required for live what_changed. */
+  account?: string;
+  now?: () => number;
 }
+
+/** Demo mode's saved previous check: the campus a day earlier. Never touches the real file. */
+export const demoBaseline = async (now: number): Promise<Snapshot> => {
+  const earlier = new EarlierDemoZoomRoomsClient();
+  return nextSnapshot(await readAccount(earlier, null), null, "demo", now - 86_400_000);
+};
 
 /** Every tool only reads from Zoom. */
 export const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
@@ -43,9 +55,14 @@ const guard =
     }
   };
 
-export const TOOL_NAMES = ["get_rooms_needing_attention", "diagnose_rooms", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
+/** what_changed writes only its own snapshot file on this computer; it never changes anything in Zoom. */
+export const SAVES_LOCALLY = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
 
-export const createServer = ({ client, source, cardHtml: cardOption }: ServerOptions): McpServer => {
+export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagnose_rooms", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
+
+export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now }: ServerOptions): McpServer => {
+  let store: SnapshotStore | null = snapshots ?? null;
+  const accountKey = source === "demo" ? "demo" : account;
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   const note = source === "demo" ? " (demo data: a fictional campus, not a real Zoom account)" : "";
 
@@ -73,6 +90,47 @@ export const createServer = ({ client, source, cardHtml: cardOption }: ServerOpt
   };
   if (cardHtml) registerAppTool(server, "get_rooms_needing_attention", { ...attentionConfig, _meta: { ui: { resourceUri: CARD_URI, visibility: ["model", "app"] } } }, runAttention);
   else server.registerTool("get_rooms_needing_attention", attentionConfig, runAttention);
+
+  server.registerTool(
+    "what_changed",
+    {
+      title: "What changed since the last check",
+      description: `Compares the Zoom Rooms account with the last time this tool ran: rooms that went offline or came back, health that got worse or better, issues opened or closed, devices that dropped or recovered, and rooms added or removed, worst first. Then saves this check as the new starting point, in a private file on this computer only (nothing is sent anywhere and nothing in Zoom changes). The first run says there is nothing to compare yet. Anything that could not be read now or last time is listed as not compared, never as fixed or cleared${note}.`,
+      inputSchema: { save: z.boolean().optional().describe("Save this check as the new starting point (default true). Set false to compare without moving it.") },
+      annotations: SAVES_LOCALLY,
+    },
+    async ({ save = true }: { save?: boolean }) => {
+      try {
+        const t = now();
+        if (!accountKey) throw new Error("what_changed needs the Zoom account to keep its checks apart; start the server with credentials or --demo.");
+        store ??= source === "demo" ? new MemorySnapshotStore(await demoBaseline(t)) : new FileSnapshotStore(defaultSnapshotPath(accountKey));
+        let previous: Snapshot | null = null;
+        let note2 = "";
+        try {
+          previous = store.load();
+        } catch (error) {
+          const why = error instanceof Error ? error.message : String(error);
+          if (save && store instanceof FileSnapshotStore) note2 = `The earlier saved check could not be used: ${why}. It was kept as ${store.setAside(t)}, and this check starts fresh.`;
+          else throw new Error(`Could not compare: ${why}.`);
+        }
+        if (previous && previous.account !== accountKey) throw new Error("The saved check belongs to a different Zoom account, so nothing was compared or saved. Point ZOOM_ROOMS_STATE at a file for this account.");
+        const reading = await readAccount(client, previous);
+        const report = compare(reading, previous, t);
+        let saved = save ? `This check was saved as the starting point for next time, in ${store.where}.` : "This check was not saved; the starting point is unchanged.";
+        if (save) {
+          try {
+            store.save(nextSnapshot(reading, previous, accountKey, t));
+          } catch (error) {
+            saved = `This check could NOT be saved (${error instanceof Error ? error.message : String(error)}), so next time compares against the older check.`;
+          }
+        }
+        const text = [report.text, ...(note2 ? ["", note2] : []), "", saved].join("\n");
+        return { content: [{ type: "text" as const, text }], structuredContent: { source, summary: report.summary, firstRun: report.firstRun, changes: report.changes, notCompared: report.notCompared } as Record<string, unknown> };
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
 
   server.registerTool(
     "diagnose_rooms",

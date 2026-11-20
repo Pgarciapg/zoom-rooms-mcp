@@ -81,3 +81,25 @@ export const MOCK_ROOM_DEVICES: Record<string, unknown> = {
   },
 };
 
+
+/** The same campus a day earlier, used only as demo mode's saved previous check: Conference 4B and Room 212 were fine,
+ * and Room 401 had a display down that has since come back. */
+export const EARLIER_ROOMS = {
+  ...MOCK_ROOMS,
+  rooms: MOCK_ROOMS.rooms.map((r) =>
+    r.id === "rm-001" ? { ...r, status: "Available", health: "Healthy" }
+    : r.id === "rm-003" ? { ...r, health: "Healthy" }
+    : r.id === "rm-016" ? { ...r, health: "Warning" }
+    : r),
+};
+export const EARLIER_DETAILS: Record<string, unknown> = {
+  "rm-002": MOCK_ROOM_DETAILS["rm-002"],
+  "rm-016": { id: "rm-016", name: "Room 401", status: "Available", health: "Warning", issues: [{ issue: "Display disconnected", severity: "warning", since: "2026-03-27T15:00:00Z" }] },
+};
+export const EARLIER_DEVICES: Record<string, unknown> = {
+  "rm-002": MOCK_ROOM_DEVICES["rm-002"],
+  "rm-016": { devices: [
+    { id: "rm-016-ctrl", device_type: "Controller", name: "Zoom Rooms Controller", status: "Online", firmware: "5.17.0" },
+    { id: "rm-016-disp", device_type: "Display", name: "Display", status: "Offline", firmware: "1.0" },
+  ] },
+};
