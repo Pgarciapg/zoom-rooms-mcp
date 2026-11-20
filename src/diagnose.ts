@@ -47,11 +47,17 @@ export interface RoomDiagnosis {
   allClear: boolean;
 }
 
-const str = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : String(v));
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const arr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const msg = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const OK_DEVICE = /^(online|connected|available|in ?use)$/i;
 const KNOWN_HEALTH = /^(healthy|warning|critical)$/i;
+/** Room computer states that mean it is up. Offline is a finding; anything else could not be classed. */
+const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
+/** Words that say something has stopped working. An issue joins a failing device only when it says one of these. */
+const FAILURE = /offline|disconnect|not detected|no signal|not responding|unreachable|down\b|fail|error|lost/i;
+const RESOLVED = /^(resolved|closed|cleared|fixed)$/i;
 
 /** Device kinds an issue text can name, keyed by the words that name them. */
 const KINDS: [RegExp, RegExp][] = [
@@ -62,14 +68,15 @@ const KINDS: [RegExp, RegExp][] = [
   [/controller|touch ?panel/i, /controller|touch/i],
 ];
 
-/** True when the issue text and the device describe the same thing: same device name, or same kind of device. */
-const sameThing = (issue: string, device: DeviceRow): boolean => {
-  const text = issue.toLowerCase();
-  if (device.name && text.includes(device.name.toLowerCase())) return true;
-  return KINDS.some(([inIssue, inType]) => inIssue.test(text) && inType.test(`${device.type} ${device.name}`));
-};
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The issue names this device itself: its full name as whole words, and the name is long enough to mean something. */
+const namesDevice = (issue: string, device: DeviceRow): boolean =>
+  device.name.length >= 4 && device.name !== "Device" && new RegExp(`(^|\\W)${escape(device.name)}($|\\W)`, "i").test(issue);
+/** The issue says this kind of device has stopped working (a firmware or echo note does not explain an outage). */
+const namesKind = (issue: string, device: DeviceRow): boolean =>
+  FAILURE.test(issue) && KINDS.some(([inIssue, inType]) => inIssue.test(issue) && inType.test(`${device.type} ${device.name}`));
 
-const levelOfSeverity = (severity: string): FindingLevel => (/crit|high|severe|error/i.test(severity) ? "critical" : "warning");
+const levelOfSeverity = (severity: string): FindingLevel => (/crit|high|severe|error|major|\bp1\b/i.test(severity) ? "critical" : "warning");
 
 /** "about 3 h" / "about 4 days", or null when the time is missing, unreadable or in the future. */
 export const ago = (iso: string | null, now: number): string | null => {
@@ -89,14 +96,17 @@ const GENERIC_ISSUE_CHECK = "Open the room in the Zoom admin portal and read its
 export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now()): Promise<RoomDiagnosis> => {
   const couldNotCheck: string[] = [];
   let detail: any = null;
-  let deviceData: any[] | null = null;
+  let deviceData: unknown[] | null = null;
   try {
     detail = await client.getRoom(roomId);
   } catch (error) {
     couldNotCheck.push(`Room details: ${msg(error)}`);
   }
   try {
-    deviceData = arr(((await client.getRoomDevices(roomId)) as any)?.devices);
+    const got = (await client.getRoomDevices(roomId)) as any;
+    const list = Array.isArray(got) ? got : got?.devices;
+    if (list != null && !Array.isArray(list)) couldNotCheck.push("Devices: Zoom answered in an unexpected shape, so none could be checked.");
+    else deviceData = arr(list);
   } catch (error) {
     couldNotCheck.push(`Devices: ${msg(error)}`);
   }
@@ -107,7 +117,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     try {
       const all = (await client.listRooms()) as any;
       const rooms = Array.isArray(all) ? all : arr(all?.rooms);
-      listed = rooms.find((r) => str(r.id) === roomId || str(r.room_id) === roomId) ?? null;
+      listed = rooms.find((r) => isObj(r) && (str(r.id) === roomId || str(r.room_id) === roomId)) ?? null;
       if (!listed && detail) couldNotCheck.push(`Status and health: room ${roomId} is not in the room list.`);
     } catch (error) {
       couldNotCheck.push(`Status and health (room list): ${msg(error)}`);
@@ -130,18 +140,29 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     lastOnline: detail?.last_online ? str(detail.last_online) : null,
   };
   room.inMeeting = /in ?meeting/i.test(room.status);
+  const offline = room.status.toLowerCase() === "offline";
+  if (!offline && !UP_STATUS.test(room.status)) couldNotCheck.push(`Status: "${room.status || "not reported"}", so the room computer could not be classed as up.`);
   if (!KNOWN_HEALTH.test(room.health)) couldNotCheck.push(`Health: "${room.health || "not reported"}", so the room could not be classed as healthy.`);
 
-  const devices: DeviceRow[] = (deviceData ?? []).map((d) => {
+  const deviceRows = (deviceData ?? []).filter(isObj);
+  if (deviceData && deviceRows.length < deviceData.length) couldNotCheck.push(`Devices: ${plural(deviceData.length - deviceRows.length, "entry")} in the device list could not be read.`.replace("entrys", "entries"));
+  const devices: DeviceRow[] = deviceRows.map((d) => {
     const status = str(d.status) || "no status";
     return { name: str(d.name) || "Device", type: str(d.device_type) || "device", status, firmware: d.firmware ? str(d.firmware) : null, ok: OK_DEVICE.test(status) };
   });
   // An empty device list usually means Zoom could not see the devices, not that the room has none.
-  if (deviceData && devices.length === 0) couldNotCheck.push("Devices: Zoom listed no devices for this room, so none could be checked.");
-  const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null }));
+  if (deviceData && deviceData.length === 0) couldNotCheck.push("Devices: Zoom listed no devices for this room, so none could be checked.");
+  const rawIssues = detail?.issues;
+  if (detail && isObj(detail) && !("issues" in detail)) couldNotCheck.push("Open issues: the room detail has no issues list, so open issues could not be read.");
+  if (rawIssues != null && !Array.isArray(rawIssues)) couldNotCheck.push("Open issues: Zoom answered in an unexpected shape, so they could not be read.");
+  const issueRows = arr(rawIssues);
+  if (issueRows.some((i) => !isObj(i))) couldNotCheck.push(`Open issues: ${plural(issueRows.filter((i) => !isObj(i)).length, "entry")} could not be read.`.replace("entrys", "entries"));
+  const issues: RoomIssue[] = issueRows
+    .filter(isObj)
+    .filter((i) => !RESOLVED.test(str(i.status)))
+    .map((i) => ({ issue: str(i.issue ?? i.description ?? i.name ?? i.alert ?? i.message ?? i.title ?? i.text), severity: str(i.severity), since: i.since ? str(i.since) : null }));
 
   const findings: RoomFinding[] = [];
-  const offline = room.status.toLowerCase() === "offline";
   if (offline) {
     const gone = ago(room.lastOnline, now);
     findings.push({
@@ -155,8 +176,14 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
 
   // Each failing device, joined with the open issue that describes it (one finding, not two).
   const usedIssues = new Set<number>();
-  for (const device of devices.filter((d) => !d.ok)) {
-    const matchIdx = issues.findIndex((issue, i) => !usedIssues.has(i) && sameThing(issue.issue, device));
+  const failing = devices.filter((d) => !d.ok);
+  // An issue that names one failing device by name is kept for that device, not given to another of the same kind.
+  const failingNamedElsewhere = (issue: string, device: DeviceRow) => failing.some((d) => d !== device && namesDevice(issue, d));
+  for (const device of failing) {
+    // Pass 1: an issue that names this device. Pass 2: an issue that says this kind of device stopped working.
+    const free = (i: number) => !usedIssues.has(i);
+    let matchIdx = issues.findIndex((issue, i) => free(i) && namesDevice(issue.issue, device));
+    if (matchIdx < 0) matchIdx = issues.findIndex((issue, i) => free(i) && namesKind(issue.issue, device) && !failingNamedElsewhere(issue.issue, device));
     const match = matchIdx >= 0 ? issues[matchIdx]! : null;
     if (match) usedIssues.add(matchIdx);
     const label = `${device.name} (${device.type}): ${device.status}`;
@@ -202,7 +229,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const head = `${room.name}${room.where ? ` (${room.where})` : ""}`;
   const meeting = room.inMeeting ? " A meeting is running in it right now: fix after it ends." : "";
   let summary: string;
-  if (allClear) summary = `${head}: all clear. Health is ${room.health}, the room computer is ${room.status || "up"}, and all ${plural(devices.length, "device")} are online.${meeting}`;
+  if (allClear) summary = `${head}: all clear. Health is ${room.health}, the room computer is ${room.status}, and ${devices.length === 1 ? "its 1 device is online" : `all ${devices.length} devices are online`}.${meeting}`;
   else if (findings.length === 0) summary = `${head}: no problems found in what could be read, but not everything could be checked (${couldNotCheck.length}). This is not an all-clear.${meeting}`;
   else {
     const crit = findings.filter((f) => f.level === "critical").length;

@@ -167,3 +167,72 @@ test("diagnosisText lists could-not-check last", async () => {
   const d = await diagnoseRoom(fake(room(), [], { getRoomDevices: async () => { throw new Error("boom"); } }), "r1", NOW);
   assert.match(diagnosisText(d), /\n\nCould not check:\n- Devices: boom$/);
 });
+
+// Regressions from the adversarial review (2026-11-20): each case below once gave a false all-clear, a crash or a wrong join.
+const cam = { name: "Cam", device_type: "Camera", status: "Online" };
+
+test("review: an unknown, padded or missing room status is never an all-clear", async () => {
+  for (const status of ["UnderConstruction", ""]) {
+    const d = await diagnoseRoom(fake(room({ status }), [cam], { listRooms: async () => ({ rooms: [{ id: "r1", status, health: "Healthy" }] }) }), "r1", NOW);
+    assert.equal(d.allClear, false, status);
+    assert.ok(d.couldNotCheck.some((c) => c.startsWith("Status:")), status);
+  }
+  const padded = await diagnoseRoom(fake(room({ status: "Offline " }), [cam]), "r1", NOW);
+  assert.equal(padded.findings[0]?.subject, "Room computer offline");
+});
+
+test("review: issues or devices in an unexpected shape are flagged, not dropped", async () => {
+  for (const issues of [{ issue: "Camera disconnected", severity: "high" }, "Camera disconnected"]) {
+    const d = await diagnoseRoom(fake(room({ issues }), [cam]), "r1", NOW);
+    assert.equal(d.allClear, false);
+    assert.ok(d.couldNotCheck.some((c) => c.startsWith("Open issues: Zoom answered in an unexpected shape")));
+  }
+  const dev = await diagnoseRoom(fake(room(), [], { getRoomDevices: async () => ({ devices: { name: "Cam" } }) }), "r1", NOW);
+  assert.deepEqual(dev.couldNotCheck, ["Devices: Zoom answered in an unexpected shape, so none could be checked."]);
+});
+
+test("review: null rows in issues or devices do not crash and are counted", async () => {
+  const d = await diagnoseRoom(fake(room({ issues: [null] }), [null, cam]), "r1", NOW);
+  assert.equal(d.allClear, false);
+  assert.ok(d.couldNotCheck.includes("Open issues: 1 entry could not be read."));
+  assert.ok(d.couldNotCheck.includes("Devices: 1 entry in the device list could not be read."));
+});
+
+test("review: an issue naming a device by name joins that device, whatever the list order", async () => {
+  const d = await diagnoseRoom(
+    fake(room({ health: "Warning", issues: [{ issue: "Cam B disconnected", severity: "warning" }] }), [
+      { name: "Cam A", device_type: "Camera", status: "Offline" },
+      { name: "Cam B", device_type: "Camera", status: "Offline" },
+    ]),
+    "r1",
+    NOW,
+  );
+  assert.match(d.findings.find((f) => f.subject.startsWith("Cam B"))!.detail, /^Open issue: Cam B disconnected/);
+  assert.match(d.findings.find((f) => f.subject.startsWith("Cam A"))!.detail, /^No open issue names it/);
+});
+
+test("review: a firmware or echo note does not explain an outage; short names do not match by accident", async () => {
+  const fw = await diagnoseRoom(fake(room({ health: "Warning", issues: [{ issue: "Camera firmware outdated", severity: "low" }] }), [{ name: "Cam", device_type: "Camera", status: "Offline" }]), "r1", NOW);
+  assert.equal(fw.findings.length, 2);
+  const echo = await diagnoseRoom(fake(room({ health: "Warning", issues: [{ issue: "Audio echo detected", severity: "warning" }] }), [{ name: "Spk", device_type: "Speaker", status: "Offline" }]), "r1", NOW);
+  assert.equal(echo.findings.length, 2);
+  const net = await diagnoseRoom(fake(room({ health: "Warning", issues: [{ issue: "Network latency high", severity: "warning" }] }), [{ name: "Net", device_type: "Controller", status: "Offline" }]), "r1", NOW);
+  assert.equal(net.findings.length, 2);
+});
+
+test("review: other issue keys, resolved issues and major severity", async () => {
+  const d = await diagnoseRoom(
+    fake(room({ health: "Warning", issues: [{ alert: "Mic offline", severity: "major" }, { issue: "Old problem", severity: "critical", status: "resolved" }] }), [cam]),
+    "r1",
+    NOW,
+  );
+  assert.deepEqual(d.findings.map((f) => [f.level, f.subject]), [["critical", "Mic offline"]]);
+});
+
+test("review: a room detail with no issues list is not an all-clear", async () => {
+  const d = await diagnoseRoom(fake({ id: "r1", name: "R1", status: "Available", health: "Healthy" }, [cam]), "r1", NOW);
+  assert.equal(d.allClear, false);
+  assert.deepEqual(d.couldNotCheck, ["Open issues: the room detail has no issues list, so open issues could not be read."]);
+  const one = await diagnoseRoom(fake(room(), [cam]), "r1", NOW);
+  assert.equal(one.summary, "R1: all clear. Health is Healthy, the room computer is Available, and its 1 device is online.");
+});
