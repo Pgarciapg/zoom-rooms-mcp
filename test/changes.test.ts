@@ -256,3 +256,22 @@ test("review: duplicate room ids are noted and block added/removed claims", asyn
   assert.match(r.content[0]!.text, /room id r1 appeared twice/);
   assert.doesNotMatch(r.content[0]!.text, /No longer in the account/);
 });
+
+test("review: 'since the last check' is the latest reading; rooms kept from an older check say how old theirs is", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  let t = NOW;
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct", now: () => t });
+  await call(c);
+  const all = state.rooms;
+  state.rooms = [all[1]];
+  state.nextToken = "more";
+  t = NOW + 3 * DAY;
+  await call(c);
+  state.rooms = all;
+  state.nextToken = "";
+  t = NOW + 3 * DAY + 2 * 3_600_000;
+  const r = await call(c);
+  assert.match(r.structuredContent.summary, /since the last check \(2 hours ago\)/);
+  assert.match(r.content[0]!.text, /1 room was compared with an older reading, from 3 days ago/);
+});

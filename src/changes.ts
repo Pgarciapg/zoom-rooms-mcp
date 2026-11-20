@@ -291,7 +291,11 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   }
   const order: Record<Direction, number> = { worse: 0, changed: 1, better: 2 };
   changes.sort((a, b) => order[a.direction] - order[b.direction]);
-  const since = times.length ? times.sort()[0]! : null;
+  // "Since the last check" is the latest reading; rooms kept from an older check (a partial list) say how old theirs is.
+  times.sort();
+  const since = times.length ? times.at(-1)! : null;
+  const older = since ? times.filter((t) => Date.parse(since) - Date.parse(t) >= 3_600_000) : [];
+  if (older.length) notCompared.push(`${older.length} room${older.length === 1 ? " was" : "s were"} compared with an older reading, from ${ago(older[0]!, now)} (missing from a partial room list in between)`);
   const roomsChanged = new Set(changes.map((c) => c.room)).size;
   const roomsWorse = new Set(changes.filter((c) => c.direction === "worse").map((c) => c.room)).size;
   const when = since ? ` since the last check (${ago(since, now)})` : "";
