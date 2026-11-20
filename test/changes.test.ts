@@ -177,3 +177,82 @@ test("pure compare: a room healthy last time with no detail read gets 'new' only
   const out = compare(await readAccount(client, snap), snap, NOW);
   assert.ok(out.changes.some((x) => x.text === "New issue: High CPU (the room was healthy at the last check)."));
 });
+
+// ---- regressions from the Sonnet adversarial review ----
+test("review: a room list in an odd shape is an error, not every room removed; nothing is saved", async () => {
+  for (const bad of [{ rooms: "x" }, {}, null, { error: "oops" }]) {
+    const { client } = fakeAccount();
+    const store = new MemorySnapshotStore();
+    await call(await connect(client, { snapshots: store, source: "zoom", account: "acct" }));
+    const before = JSON.stringify(store.load());
+    const odd: ZoomRoomsClient = { ...client, listRooms: async () => bad };
+    const r = await call(await connect(odd, { snapshots: store, source: "zoom", account: "acct" }));
+    assert.equal(r.isError, true, JSON.stringify(bad));
+    assert.match(r.content[0]!.text, /unexpected shape/);
+    assert.equal(JSON.stringify(store.load()), before);
+  }
+});
+
+test("review: an empty room list after a non-empty one is treated as incomplete", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [];
+  const r = await call(c);
+  assert.doesNotMatch(r.content[0]!.text, /No longer in the account/);
+  assert.match(r.content[0]!.text, /Zoom returned no rooms, though there were rooms last time/);
+  assert.equal(Object.keys(store.load()!.rooms).length, 2);
+});
+
+test("review: an unreadable or missing issues list is unknown, never 'Issue closed'", async () => {
+  for (const variant of ["odd-issue", "no-issues"]) {
+    const { state, client } = fakeAccount();
+    const store = new MemorySnapshotStore();
+    const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+    await call(c);
+    state.rooms[1] = { ...state.rooms[1], health: "Healthy" };
+    state.devices.r2 = [{ name: "Ceiling Mic", device_type: "Microphone", status: "Online" }];
+    const shaped: ZoomRoomsClient = { ...client, getRoom: async (id) => (variant === "odd-issue" ? { id, issues: [{ issue_name: "Microphone offline" }] } : { id }) };
+    const r = await call(await connect(shaped, { snapshots: store, source: "zoom", account: "acct" }));
+    assert.doesNotMatch(r.content[0]!.text, /Issue closed/, variant);
+    assert.match(r.content[0]!.text, /Room Two: issues and devices could not be read/, variant);
+  }
+});
+
+test("review: Offline to a missing or odd status is not 'back online'", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  state.rooms[0] = { ...state.rooms[0], status: "Offline" };
+  await call(c);
+  state.rooms[0] = { id: "r1", name: "Room One", health: "Healthy" };
+  const r = await call(c);
+  assert.doesNotMatch(r.content[0]!.text, /Back online/);
+  assert.match(r.content[0]!.text, /Status now reads "unknown" \(was Offline\); not counted as back online/);
+});
+
+test("review: room ids like 'constructor' and '__proto__' do not crash or corrupt the snapshot", async () => {
+  const { state, client } = fakeAccount();
+  state.rooms = [{ id: "constructor", name: "C", status: "Available", health: "Healthy" }, { id: "__proto__", name: "P", status: "Available", health: "Healthy" }];
+  const dir = mkdtempSync(join(tmpdir(), "zr-"));
+  const store = new FileSnapshotStore(join(dir, "s.json"));
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  const first = await call(c);
+  assert.ok(!first.isError, first.content[0]!.text);
+  const again = await call(c);
+  assert.ok(!again.isError, again.content[0]!.text);
+  assert.equal(again.structuredContent.summary, "Nothing changed since the last check (less than a minute ago).");
+  assert.deepEqual(Object.keys(store.load()!.rooms).sort(), ["__proto__", "constructor"]);
+});
+
+test("review: duplicate room ids are noted and block added/removed claims", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [state.rooms[0], state.rooms[0]];
+  const r = await call(c);
+  assert.match(r.content[0]!.text, /room id r1 appeared twice/);
+  assert.doesNotMatch(r.content[0]!.text, /No longer in the account/);
+});

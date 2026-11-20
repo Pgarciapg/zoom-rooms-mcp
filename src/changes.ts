@@ -109,6 +109,9 @@ const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == nul
 const arr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const OK_DEVICE = /^(online|connected|available|in ?use)$/i;
+/** Own entries only, so a room id like "constructor" is never mistaken for a built-in. */
+const prevRoom = (s: Snapshot | null | undefined, id: string): RoomSnapshot | undefined => (s && Object.hasOwn(s.rooms, id) ? s.rooms[id] : undefined);
+const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
 const issueKey = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
 const HEALTH_RANK: Record<string, number> = { healthy: 0, warning: 1, critical: 2 };
 const unhappy = (f: RoomListFacts) => /^offline$/i.test(f.status) || /^(warning|critical)$/i.test(f.health) || !(f.health.toLowerCase() in HEALTH_RANK);
@@ -126,20 +129,22 @@ export interface Reading {
 const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDetailFacts> => {
   const [room, devices] = await Promise.all([client.getRoom(id), client.getRoomDevices(id)]);
   if (!isObj(room)) throw new Error("the room detail came back in an unexpected shape");
+  // No issues list, or an issue in a shape we cannot read, means the issues are unknown, never "none".
   const rawIssues = (room as any).issues;
-  if (rawIssues != null && !Array.isArray(rawIssues)) throw new Error("its open issues came back in an unexpected shape");
+  if (!Array.isArray(rawIssues)) throw new Error(rawIssues == null ? "the room detail had no issues list" : "its open issues came back in an unexpected shape");
   const rawDevices = isObj(devices) ? (devices as any).devices : Array.isArray(devices) ? devices : undefined;
   if (!Array.isArray(rawDevices)) throw new Error("its device list came back in an unexpected shape");
   // Kept as written; compared ignoring case and spacing.
   const byKey = new Map<string, string>();
-  for (const i of arr(rawIssues)) {
+  for (const i of rawIssues) {
     const text = str(isObj(i) ? i.issue ?? i.message ?? i.description : i).replace(/\s+/g, " ");
-    if (text && !byKey.has(issueKey(text))) byKey.set(issueKey(text), text);
+    if (!text) throw new Error("an open issue came back in a shape that could not be read");
+    if (!byKey.has(issueKey(text))) byKey.set(issueKey(text), text);
   }
   const issues = [...byKey.values()].sort();
   const down: Record<string, string> = {};
   for (const d of rawDevices) {
-    if (!isObj(d)) continue;
+    if (!isObj(d)) throw new Error("a device came back in a shape that could not be read");
     const status = str(d.status);
     if (OK_DEVICE.test(status)) continue;
     const name = `${str(d.name) || "Unnamed device"} (${str(d.device_type) || "device"})`;
@@ -152,21 +157,33 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
 export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null): Promise<Reading> => {
   const couldNotCheck: string[] = [];
   const list = await client.listRooms();
-  const rows = Array.isArray(list) ? list : arr((list as any)?.rooms);
+  const rawRows = Array.isArray(list) ? list : (list as any)?.rooms;
+  // A list in a shape we cannot read is an error, never an empty account (that would read as every room removed).
+  if (!Array.isArray(rawRows)) throw new Error("Zoom returned the room list in an unexpected shape, so nothing was compared or saved.");
+  const rows: unknown[] = rawRows;
   let fullList = !(isObj(list) && str((list as any).next_page_token));
   if (!fullList) couldNotCheck.push("Room list: more rooms exist than were read, so rooms are not called added or removed");
   const rooms = new Map<string, RoomListFacts>();
   for (const r of rows) {
-    const id = isObj(r) ? str(r.id) : "";
+    const id = isObj(r) ? str((r as any).id) : "";
     if (!id) {
       fullList = false;
       couldNotCheck.push("Room list: a row had no room id and was skipped");
       continue;
     }
-    rooms.set(id, { name: str(r.name) || id, status: str(r.status) || "unknown", health: str(r.health) || "unknown" });
+    if (rooms.has(id)) {
+      fullList = false;
+      couldNotCheck.push(`Room list: room id ${id} appeared twice; kept the last row, and rooms are not called added or removed this time`);
+    }
+    rooms.set(id, { name: str((r as any).name) || id, status: str((r as any).status) || "unknown", health: str((r as any).health) || "unknown" });
+  }
+  // An empty list where there were rooms last time is far more likely a bad read than a deleted account.
+  if (rooms.size === 0 && previous && Object.keys(previous.rooms).length) {
+    fullList = false;
+    couldNotCheck.push("Room list: Zoom returned no rooms, though there were rooms last time; treated as an incomplete read");
   }
   const wanted = [...rooms.entries()].filter(([id, f]) => {
-    const before = previous?.rooms[id];
+    const before = prevRoom(previous, id);
     return unhappy(f) || (before && (unhappy(before.list) || (before.detail && (before.detail.issues.length || Object.keys(before.detail.down).length))));
   });
   // Worst now first, so the cap drops the healthiest.
@@ -223,7 +240,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   const add = (room: string, direction: Direction, text: string) => changes.push({ room, direction, text });
   const times: string[] = [];
   for (const [id, now_] of reading.rooms) {
-    const before = previous.rooms[id];
+    const before = prevRoom(previous, id);
     if (!before) {
       if (previous.fullListAt && reading.fullList) add(now_.name, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
       else notCompared.push(`${now_.name}: not in the last check's room list, which was not read in full, so it may not be new`);
@@ -233,7 +250,8 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const was = before.list;
     if (was.name !== now_.name) add(now_.name, "changed", `Renamed from "${was.name}".`);
     if (!isOffline(was.status) && isOffline(now_.status)) add(now_.name, "worse", `Went offline (was ${was.status}).`);
-    else if (isOffline(was.status) && !isOffline(now_.status)) add(now_.name, "better", `Back online (now ${now_.status}).`);
+    else if (isOffline(was.status) && UP_STATUS.test(now_.status)) add(now_.name, "better", `Back online (now ${now_.status}).`);
+    else if (isOffline(was.status) && !isOffline(now_.status)) add(now_.name, "changed", `Status now reads "${now_.status}" (was Offline); not counted as back online.`);
     const hw = healthRank(was.health);
     const hn = healthRank(now_.health);
     if (hw !== undefined && hn !== undefined && hn !== hw) add(now_.name, hn > hw ? "worse" : "better", `Health ${hn > hw ? "worse" : "better"}: ${now_.health} (was ${was.health}).`);
@@ -293,11 +311,11 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
 /** The next snapshot: this reading, with every part not read this time kept from the last one. */
 export const nextSnapshot = (reading: Reading, previous: Snapshot | null, account: string, now: number): Snapshot => {
   const at = new Date(now).toISOString();
-  const rooms: Record<string, RoomSnapshot> = {};
+  const rooms: Record<string, RoomSnapshot> = Object.create(null);
   // Rooms missing from a partial list keep their last reading, so a later full read can still compare them.
   if (previous && !reading.fullList) for (const [id, r] of Object.entries(previous.rooms)) rooms[id] = structuredClone(r);
   for (const [id, f] of reading.rooms) {
-    const before = previous?.rooms[id];
+    const before = prevRoom(previous, id);
     const detail = reading.details.get(id);
     rooms[id] = {
       list: { ...f, at },
