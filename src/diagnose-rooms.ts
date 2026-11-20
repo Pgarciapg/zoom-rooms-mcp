@@ -211,7 +211,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     const raw = Array.isArray(all) ? all : arr(all?.rooms);
     rooms = raw.filter((r) => r !== null && typeof r === "object" && !Array.isArray(r));
     if (rooms.length < raw.length) couldNotCheck.push(`Room list: ${plural(raw.length - rooms.length, "entry", "entries")} could not be read.`);
-    if (str(all?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms and only the first was read.");
+    if (str(all?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };

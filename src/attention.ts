@@ -82,7 +82,9 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   const couldNotCheck: string[] = [];
   let rooms: any[];
   try {
-    rooms = roomsOf(await client.listRooms());
+    const list = await client.listRooms();
+    rooms = roomsOf(list);
+    if (typeof (list as any)?.next_page_token === "string" && (list as any).next_page_token) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };

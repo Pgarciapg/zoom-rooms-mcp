@@ -206,7 +206,7 @@ test("review: more pages, unreadable list entries, or an odd status block the al
   const healthy = row("a", "Available", "Healthy");
   const paged = await diagnoseRooms({ ...account([healthy], {}, {}), listRooms: async () => ({ rooms: [healthy], next_page_token: "abc" }) }, NOW);
   assert.equal(paged.allClear, false);
-  assert.ok(paged.couldNotCheck.includes("Room list: Zoom has more pages of rooms and only the first was read."));
+  assert.ok(paged.couldNotCheck.includes("Room list: Zoom has more pages of rooms than were read."));
   const junk = await diagnoseRooms(account([healthy, null, "x"], {}, {}), NOW);
   assert.equal(junk.allClear, false);
   assert.ok(junk.couldNotCheck.includes("Room list: 2 entries could not be read."));

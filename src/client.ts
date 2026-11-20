@@ -9,6 +9,9 @@ export interface ZoomRoomsClient {
 }
 
 export const DEFAULT_BASE_URL = "https://api.zoom.us/v2";
+/** Rooms per page (Zoom's maximum) and the most pages read in one call: 50 x 300 = 15,000 rooms. */
+export const ROOM_PAGE_SIZE = 300;
+export const MAX_ROOM_PAGES = 50;
 
 export class ZoomApiError extends Error {
   readonly status: number;
@@ -41,8 +44,28 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     return res.json();
   }
 
-  listRooms() {
-    return this.request("/rooms");
+  /**
+   * Every room, across all pages. Zoom pages the room list (page_size up to 300, then next_page_token). A page that
+   * fails throws, so callers never get a partial list presented as complete. If the page cap is hit, the result keeps
+   * Zoom's next_page_token, so callers can see the list is not whole.
+   */
+  async listRooms() {
+    const rooms: unknown[] = [];
+    const seen = new Set<string>();
+    let token = "";
+    let last: any = {};
+    for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
+      const query = `page_size=${ROOM_PAGE_SIZE}${token ? `&next_page_token=${encodeURIComponent(token)}` : ""}`;
+      last = await this.request(`/rooms?${query}`);
+      const batch = (last as any)?.rooms;
+      if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
+      rooms.push(...(batch ?? []));
+      token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
+      if (!token) return { ...last, rooms, page_count: page, next_page_token: "" };
+      if (seen.has(token)) throw new ZoomApiError(502, `Zoom repeated a page token on page ${page} of the room list; stopped so rooms are not counted twice.`);
+      seen.add(token);
+    }
+    return { ...last, rooms, page_count: MAX_ROOM_PAGES, next_page_token: token };
   }
 
   getRoom(roomId: string) {

@@ -66,7 +66,7 @@ If only some of the three are set, the server refuses to start and names what is
 | `get_rooms_needing_attention` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for each problem room | Start here: problem rooms worst first, with open issues, devices not online, whether a meeting is running now, and a plain next step. Never an all-clear while something could not be read |
 | `diagnose_rooms` | `GET /rooms`, then `diagnose_room` for each problem room | Shared causes across problem rooms: room computers offline on the same floor, one device model or firmware failing in several rooms, the same problem in several rooms. Worst first, one check each, then a per-room list. Never an all-clear while something could not be read |
 | `diagnose_room` | `GET /rooms/{roomId}` and `/devices` (plus `GET /rooms` if the detail lacks status or health) | Why one room is unhappy and what to check first: the room computer, each open issue and each device not online, an issue and its failing device joined into one finding, worst first, one check each. Never an all-clear while something could not be read |
-| `list_zoom_rooms` | `GET /rooms` | Every room with status and health |
+| `list_zoom_rooms` | `GET /rooms` (every page) | Every room with status and health. Reads all pages, up to 15,000 rooms; a page that fails fails the call, and past the cap the result keeps Zoom's `next_page_token` so it never passes as the whole list |
 | `get_zoom_room` | `GET /rooms/{roomId}` | One room's details and open issues |
 | `get_zoom_room_devices` | `GET /rooms/{roomId}/devices` | Cameras, mics, speakers, controllers, displays |
 
