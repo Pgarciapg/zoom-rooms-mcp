@@ -47,7 +47,7 @@ const arr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const roomsOf = (data: unknown): any[] => (Array.isArray(data) ? data : arr((data as any)?.rooms));
 const OK_DEVICE = /^(online|connected|available|in ?use)$/i;
 
-const levelOf = (room: any): Level | null => {
+export const levelOf = (room: any): Level | null => {
   const health = str(room.health).toLowerCase();
   const status = str(room.status).toLowerCase();
   if (health === "critical" || status === "offline") return "critical";

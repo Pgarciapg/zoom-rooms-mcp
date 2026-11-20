@@ -93,7 +93,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const GENERIC_DEVICE_CHECK = "Check the device's power and cable, then look at it in the Zoom admin portal.";
 const GENERIC_ISSUE_CHECK = "Open the room in the Zoom admin portal and read its full alert.";
 
-export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now()): Promise<RoomDiagnosis> => {
+/** Pass `listed` (the room's row from listRooms) when you already have it, so the room list is not read again. */
+export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown): Promise<RoomDiagnosis> => {
   const couldNotCheck: string[] = [];
   let detail: any = null;
   let deviceData: unknown[] | null = null;
@@ -112,8 +113,8 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   }
 
   // The room's status and health come from its detail; when the detail lacks them, read them from the room list.
-  let listed: any = null;
-  if (!str(detail?.status) || !str(detail?.health)) {
+  let listed: any = isObj(listedRow) ? listedRow : null;
+  if (!listed && (!str(detail?.status) || !str(detail?.health))) {
     try {
       const all = (await client.listRooms()) as any;
       const rooms = Array.isArray(all) ? all : arr(all?.rooms);

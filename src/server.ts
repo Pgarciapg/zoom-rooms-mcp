@@ -4,6 +4,7 @@ import { z } from "zod";
 import { roomsNeedingAttention } from "./attention.ts";
 import { attentionCard } from "./card-model.ts";
 import { diagnoseRoom, diagnosisText } from "./diagnose.ts";
+import { diagnoseRooms } from "./diagnose-rooms.ts";
 import { CARD_HTML } from "./generated/card.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { CARD_URI, SERVER_NAME, SERVER_VERSION } from "./version.ts";
@@ -42,7 +43,7 @@ const guard =
     }
   };
 
-export const TOOL_NAMES = ["get_rooms_needing_attention", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
+export const TOOL_NAMES = ["get_rooms_needing_attention", "diagnose_rooms", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
 
 export const createServer = ({ client, source, cardHtml: cardOption }: ServerOptions): McpServer => {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
@@ -72,6 +73,24 @@ export const createServer = ({ client, source, cardHtml: cardOption }: ServerOpt
   };
   if (cardHtml) registerAppTool(server, "get_rooms_needing_attention", { ...attentionConfig, _meta: { ui: { resourceUri: CARD_URI, visibility: ["model", "app"] } } }, runAttention);
   else server.registerTool("get_rooms_needing_attention", attentionConfig, runAttention);
+
+  server.registerTool(
+    "diagnose_rooms",
+    {
+      title: "Shared causes across Zoom Rooms",
+      description: `Runs diagnose_room on every problem room and looks for causes they share: room computers offline on the same floor (often one switch or power circuit), the same device model failing in several rooms, failing devices of one kind on the same firmware, or the same kind of problem in several rooms. Shared causes come worst first with one check each, then a short per-room list. Rooms it could not read are listed apart, and it never reports all clear while something could not be read${note}.`,
+      inputSchema: {},
+      annotations: READ_ONLY,
+    },
+    async () => {
+      try {
+        const result = await diagnoseRooms(client);
+        return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
 
   server.registerTool(
     "diagnose_room",
