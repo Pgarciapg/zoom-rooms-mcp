@@ -17,7 +17,7 @@ const connect = async () => {
 const call = async (client: Client, name: string, args: Record<string, unknown> = {}) =>
   (await client.callTool({ name, arguments: args })) as Result;
 
-test("lists exactly the four tools, all read-only", async () => {
+test("lists exactly the five tools, all read-only", async () => {
   const client = await connect();
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [...TOOL_NAMES].sort());

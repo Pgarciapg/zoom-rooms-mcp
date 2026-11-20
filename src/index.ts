@@ -3,3 +3,4 @@ export { HttpZoomRoomsClient, DemoZoomRoomsClient, ZoomApiError, DEFAULT_BASE_UR
 export { getAccessToken, TOKEN_URL, type ZoomCredentials } from "./auth.ts";
 export { loadCredentials, parseEnvFile, ENV_NAMES } from "./credentials.ts";
 export { SERVER_NAME, SERVER_VERSION } from "./version.ts";
+export { diagnoseRoom, diagnosisText, type RoomDiagnosis, type RoomFinding } from "./diagnose.ts";

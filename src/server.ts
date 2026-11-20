@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { roomsNeedingAttention } from "./attention.ts";
 import { attentionCard } from "./card-model.ts";
+import { diagnoseRoom, diagnosisText } from "./diagnose.ts";
 import { CARD_HTML } from "./generated/card.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { CARD_URI, SERVER_NAME, SERVER_VERSION } from "./version.ts";
@@ -41,7 +42,7 @@ const guard =
     }
   };
 
-export const TOOL_NAMES = ["get_rooms_needing_attention", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
+export const TOOL_NAMES = ["get_rooms_needing_attention", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
 
 export const createServer = ({ client, source, cardHtml: cardOption }: ServerOptions): McpServer => {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
@@ -71,6 +72,24 @@ export const createServer = ({ client, source, cardHtml: cardOption }: ServerOpt
   };
   if (cardHtml) registerAppTool(server, "get_rooms_needing_attention", { ...attentionConfig, _meta: { ui: { resourceUri: CARD_URI, visibility: ["model", "app"] } } }, runAttention);
   else server.registerTool("get_rooms_needing_attention", attentionConfig, runAttention);
+
+  server.registerTool(
+    "diagnose_room",
+    {
+      title: "Diagnose one Zoom Room",
+      description: `Why one Zoom Room is unhappy and what to check first: the room computer, each open issue and each device that is not online, with an issue and the failing device it describes joined into one finding, worst first, each with one check. Says whether a meeting is running in it now. Anything it could not read is listed apart, and it never reports all clear while something could not be read${note}.`,
+      inputSchema: { roomId },
+      annotations: READ_ONLY,
+    },
+    async ({ roomId }: { roomId: string }) => {
+      try {
+        const result = await diagnoseRoom(client, roomId);
+        return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
 
   server.registerTool(
     "list_zoom_rooms",

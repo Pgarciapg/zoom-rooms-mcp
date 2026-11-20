@@ -65,7 +65,7 @@ export const nextStep = (room: Pick<AttentionRoom, "status" | "issues" | "device
   return specific ?? "Open the room in the Zoom admin portal and read its full alert.";
 };
 
-const deviceStep = (room: Pick<AttentionRoom, "issues" | "devices">): string | null => {
+export const deviceStep = (room: Pick<AttentionRoom, "issues" | "devices">): string | null => {
   const text = [...room.issues.map((i) => i.issue), ...room.devices].join(" ").toLowerCase();
   if (/camera/.test(text) && /disconnect|offline|not detected/.test(text))
     return "Reseat the camera's USB (or network) cable at the room computer, then restart the Zoom Rooms app.";
@@ -142,6 +142,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       lines.push(`   Next: ${room.next}`);
     });
     if (hidden > 0) lines.push(`${hidden} more problem room${hidden === 1 ? "" : "s"} not read in detail: ${notReadInDetail.join(", ")}.`);
+    lines.push("For one room's full answer, call diagnose_room with its id.");
   }
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
   return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear };
