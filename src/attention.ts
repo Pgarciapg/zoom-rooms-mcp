@@ -5,6 +5,7 @@
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
+import { freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
 
 export type Level = "critical" | "warning";
 
@@ -27,6 +28,8 @@ export interface AttentionRoom {
   /** Devices whose status is not Online or Connected, e.g. "Logitech Rally (Camera): Disconnected". */
   devices: string[];
   next: string;
+  /** For a room in a meeting: up to three rooms in the same Zoom location that are free and healthy now (see move-to.ts). */
+  moveTo: { id: string; name: string }[];
 }
 
 export interface Attention {
@@ -127,7 +130,12 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${str(d.name) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
-      return { id, name, level, health: str(r.health), where, inMeeting: /in ?meeting/i.test(str(r.status)), ...base, next: nextStep(base) };
+      const inMeeting = /in ?meeting/i.test(str(r.status));
+      // Where the meeting can go, from the room list already read (no extra Zoom call).
+      const moveTo = inMeeting
+        ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean))).slice(0, MOVE_TO_LIMIT)
+        : [];
+      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base), moveTo };
     }),
   );
   // Within a level: offline first, then the oldest open issue first.
@@ -145,7 +153,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
     lines.push(`${problems.length} of ${rooms.length} rooms need attention: ${parts}.`);
     detailed.forEach((room, i) => {
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? ", in a meeting right now (fix after it ends)" : ""}.`;
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}, free now in the same Zoom location` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);

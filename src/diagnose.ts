@@ -6,6 +6,7 @@
 // clear while something could not be read.
 import { deviceStep, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
+import { freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 
 export type FindingLevel = "critical" | "warning";
@@ -58,10 +59,7 @@ export interface RoomDiagnosis {
   moveTo: { rooms: { id: string; name: string }[]; more: number; note: string | null } | null;
 }
 
-/** Most free rooms named; the rest are counted. */
-export const MOVE_TO_LIMIT = 3;
-/** A room name as shown in a one-line suggestion: no line breaks or control characters, short. */
-const cleanName = (n: string) => n.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 60);
+export { MOVE_TO_LIMIT } from "./move-to.ts";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -290,14 +288,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
       if (!mine.size)
         moveTo = { rooms: [], more: 0, note: roomList.partial && !ownRow ? "This room's location was not in the part of Zoom's room list that was read, so no room nearby could be suggested." : "Zoom gives no location for this room, so no room nearby could be suggested." };
       else {
-        const seen = new Set<string>();
-        const free = roomList.rooms
-          .filter(isObj)
-          .filter((r) => !!(str(r.id) || str(r.room_id)) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
-          .filter((r) => mine.has(str(r.location_id)) && /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health)))
-          .map((r) => ({ id: str(r.id) || str(r.room_id), name: cleanName(str(r.name) || str(r.id) || str(r.room_id)) }))
-          .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
-          .sort((a, b) => a.name.localeCompare(b.name));
+        const free = freeRoomsIn(roomList.rooms, self, mine);
         const partial = roomList.partial ? "Only part of Zoom's room list was read, so there may be more." : null;
         moveTo = { rooms: free.slice(0, MOVE_TO_LIMIT), more: Math.max(0, free.length - MOVE_TO_LIMIT), note: partial };
       }

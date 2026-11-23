@@ -144,3 +144,30 @@ test("a room list that already failed is not read again", async () => {
   assert.equal(calls.n, 1);
   assert.match(d.moveTo!.note!, /^Could not read the room list/);
 });
+
+// get_rooms_needing_attention ("start here") uses the same rule for a problem room in a meeting (2026-11-23).
+import { roomsNeedingAttention } from "../src/attention.ts";
+
+test("the attention list offers a free room for a problem room in a meeting, with no extra Zoom call", async () => {
+  const calls = { n: 0 };
+  const client = fake([
+    broken,
+    row("r2", "Room 402", "Available", "Healthy"),
+    row("r3", "Room 401", "Available", "Healthy"),
+    row("r4", "Room 403", "In Meeting", "Healthy"),
+    row("r5", "Room 501", "Available", "Healthy", "L5"),
+  ], { listCalls: calls });
+  const a = await roomsNeedingAttention(client);
+  assert.equal(calls.n, 1);
+  assert.deepEqual(a.rooms[0]!.moveTo, [{ id: "r3", name: "Room 401" }, { id: "r2", name: "Room 402" }]);
+  assert.match(a.summary, /in a meeting right now \(fix after it ends, or move it to Room 401, free now in the same Zoom location\)\./);
+});
+
+test("the attention list says nothing extra when no room is free, or the problem room is not in a meeting", async () => {
+  const busy = await roomsNeedingAttention(fake([broken, row("r4", "Room 403", "In Meeting", "Healthy")]));
+  assert.deepEqual(busy.rooms[0]!.moveTo, []);
+  assert.match(busy.summary, /in a meeting right now \(fix after it ends\)\./);
+  const idle = await roomsNeedingAttention(fake([{ ...broken, status: "Available" }, row("r2", "Room 402", "Available", "Healthy")]));
+  assert.deepEqual(idle.rooms[0]!.moveTo, []);
+  assert.doesNotMatch(idle.summary, /move it to/);
+});
