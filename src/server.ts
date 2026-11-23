@@ -154,13 +154,13 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     "diagnose_room",
     {
       title: "Diagnose one Zoom Room",
-      description: `Why one Zoom Room is unhappy and what to check first: the room computer, each open issue and each device that is not online, with an issue and the failing device it describes joined into one finding, worst first, each with one check. Says whether a meeting is running in it now. Anything it could not read is listed apart, and it never reports all clear while something could not be read${note}.`,
+      description: `Why one Zoom Room is unhappy and what to check first: the room computer, each open issue and each device that is not online, with an issue and the failing device it describes joined into one finding, worst first, each with one check. Says whether a meeting is running in it now and, for a room with a problem, names up to three other rooms in the same Zoom location that are healthy and free right now. Anything it could not read is listed apart, and it never reports all clear while something could not be read${note}.`,
       inputSchema: { roomId },
       annotations: READ_ONLY,
     },
     async ({ roomId }: { roomId: string }) => {
       try {
-        const result = await diagnoseRoom(client, roomId);
+        const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true });
         return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
