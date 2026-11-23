@@ -161,7 +161,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     inMeeting: false,
     lastOnline: detail?.last_online ? str(detail.last_online) : null,
   };
-  room.inMeeting = /in ?meeting/i.test(room.status);
+  room.inMeeting = /^\s*in ?meeting\s*$/i.test(room.status);
   // Where the room is. A building without a floor (or the reverse) is shown but never used to group rooms.
   const building = isObj(loc) ? str(loc.building) : "";
   const floorName = isObj(loc) ? str(loc.floor) : "";

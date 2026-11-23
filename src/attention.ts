@@ -130,7 +130,8 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${str(d.name) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
-      const inMeeting = /in ?meeting/i.test(str(r.status));
+      // Exactly "In Meeting" (any case or spacing): "Not in meeting" is not a meeting.
+      const inMeeting = /^\s*in ?meeting\s*$/i.test(str(r.status));
       // Where the meeting can go, from the room list already read (no extra Zoom call).
       const moveTo = inMeeting
         ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean))).slice(0, MOVE_TO_LIMIT)

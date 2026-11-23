@@ -18,7 +18,11 @@ export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<
     .filter(isObj)
     .filter((r) => !!(str(r.id) || str(r.room_id)) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
     .filter((r) => locations.has(str(r.location_id)) && /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health)))
-    .map((r) => ({ id: str(r.id) || str(r.room_id), name: cleanName(str(r.name) || str(r.id) || str(r.room_id)) }))
+    .map((r) => {
+      const id = str(r.id) || str(r.room_id);
+      return { id, name: cleanName(str(r.name)) || cleanName(id) || "Unnamed room" };
+    })
     .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    // "Room 2" before "Room 10".
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 };

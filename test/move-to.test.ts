@@ -171,3 +171,18 @@ test("the attention list says nothing extra when no room is free, or the problem
   assert.deepEqual(idle.rooms[0]!.moveTo, []);
   assert.doesNotMatch(idle.summary, /move it to/);
 });
+
+// From the short Sonnet review of the attention change (2026-11-23).
+test('"Not in meeting" is not a meeting, and names sort with numbers in order', async () => {
+  const notIn = await roomsNeedingAttention(fake([{ ...broken, status: "Not in meeting" }, row("r2", "Room 402", "Available", "Healthy")]));
+  assert.equal(notIn.rooms[0]!.inMeeting, false);
+  assert.doesNotMatch(notIn.summary, /in a meeting right now|move it to/);
+  const sorted = await roomsNeedingAttention(fake([broken, row("r2", "Room 10", "Available", "Healthy"), row("r3", "Room 2", "Available", "Healthy")]));
+  assert.deepEqual(sorted.rooms[0]!.moveTo.map((r) => r.name), ["Room 2", "Room 10"]);
+});
+
+test("a free room whose name is only control characters is shown by its id", async () => {
+  const a = await roomsNeedingAttention(fake([broken, row("r2", "\u0001", "Available", "Healthy")]));
+  assert.deepEqual(a.rooms[0]!.moveTo, [{ id: "r2", name: "r2" }]);
+  assert.match(a.summary, /or move it to r2, free now/);
+});
