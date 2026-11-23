@@ -33,7 +33,7 @@ const joinNames = (names: string[]) => (names.length <= 1 ? names.join("") : `${
 /**
  * Several meetings displaced at once (2026-11-23): give each a different free room, in the order given (worst room
  * first), so two meetings are never sent to the same room. Each room's list is its own pick first, then free rooms no
- * other meeting was given. A room whose free rooms were all given away gets a note naming them and who they went to,
+ * other meeting was given or has as a backup. A room whose free rooms were all given away gets a note naming them and who they went to,
  * instead of an empty or shared suggestion. Rooms with no candidates at all get no note.
  */
 export const allocateMoveTo = (
@@ -48,9 +48,16 @@ export const allocateMoveTo = (
     if (pick) givenTo.set(pick.id, cleanName(name) || "another room");
     return pick;
   });
+  // Backups (after a meeting's own pick) are spare rooms nobody was given, and each spare backs up one meeting only, worst
+  // room first, so two meetings never fall back to the same room. A later meeting can get fewer backups, never a shared one.
+  const backedUp = new Set<string>();
   return wanted.map(({ candidates }, i) => {
     const pick = picks[i];
-    if (pick) return { moveTo: [pick, ...candidates.filter((c) => c.id !== pick.id && !givenTo.has(c.id))].slice(0, MOVE_TO_LIMIT), moveToNote: null };
+    if (pick) {
+      const backups = candidates.filter((c) => c.id !== pick.id && !givenTo.has(c.id) && !backedUp.has(c.id)).slice(0, MOVE_TO_LIMIT - 1);
+      backups.forEach((c) => backedUp.add(c.id));
+      return { moveTo: [pick, ...backups], moveToNote: null };
+    }
     if (!candidates.length) return { moveTo: [], moveToNote: null };
     const takers = [...new Set(candidates.map((c) => givenTo.get(c.id)!))];
     const shown = candidates.slice(0, MOVE_TO_LIMIT).map((c) => c.name).join(", ") + (candidates.length > MOVE_TO_LIMIT ? `, +${candidates.length - MOVE_TO_LIMIT} more` : "");

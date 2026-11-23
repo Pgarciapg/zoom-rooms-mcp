@@ -291,3 +291,19 @@ test("diagnose_room says when another problem room nearby is also in a meeting, 
   const alone = await run(fake([broken, row("ok", "Room 403", "In Meeting", "Healthy"), row("f1", "Room 401", "Available", "Healthy")]));
   assert.doesNotMatch(alone.summary, /also in a meeting/);
 });
+
+// Kept item from the move-apart review (2026-11-23, 3:00 relay): backups after the first could repeat across meetings,
+// so two meetings could both fall back to the same spare room.
+test("backup rooms are never shared between two meetings", () => {
+  const r = (n: number) => ({ id: `R${n}`, name: `Room ${n}` });
+  const all = [r(1), r(2), r(3), r(4), r(5)];
+  const out = allocateMoveTo([{ name: "A", candidates: all }, { name: "B", candidates: all }]);
+  const ids = out.flatMap((o) => o.moveTo.map((m) => m.id));
+  assert.equal(new Set(ids).size, ids.length, ids.join(" "));
+  assert.equal(out[0]!.moveTo.length, 3);
+  assert.equal(out[1]!.moveTo.length, 2); // its own pick plus the one spare left
+  // Fewer spares than meetings: the later meeting keeps its own pick and simply has no backup.
+  const tight = allocateMoveTo([{ name: "A", candidates: all.slice(0, 3) }, { name: "B", candidates: all.slice(0, 3) }]);
+  assert.deepEqual(tight.map((o) => o.moveTo.length), [2, 1]);
+  assert.equal(tight[1]!.moveToNote, null);
+});
