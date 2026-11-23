@@ -327,7 +327,7 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
   if (d.moveTo) {
     const m = d.moveTo;
     // "Same Zoom location", not the floor: a location code can be a whole building.
-    if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map((r) => `${r.name} (${r.id})`).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
+    if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map((r) => (r.name.endsWith(`(Zoom room ${r.id})`) ? r.name : `${r.name} (${r.id})`)).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
     else lines.push("", m.note && /^(Could not|Zoom gives no|This room's location)/.test(m.note) ? m.note : `No other room in the same Zoom location is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
   }
   if (d.devices.length) lines.push("", "Devices:", ...d.devices.map((x) => `- ${x.name} (${x.type}): ${x.status}${x.firmware ? `, firmware ${x.firmware}` : ""}`));

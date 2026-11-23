@@ -328,3 +328,10 @@ test("two free rooms with the same name carry Zoom's room id", () => {
   const free = freeRoomsIn([row("aaa", "Huddle"), row("bbb", "huddle"), row("ccc", "Room 5")], new Set(["x"]), new Set(["L1"]));
   assert.deepEqual(free.map((f) => f.name).sort(), ["Huddle (Zoom room aaa)", "huddle (Zoom room bbb)", "Room 5"].sort());
 });
+
+test("review: diagnose_room does not print a same-named free room's id twice", async () => {
+  const d = await run(fake([broken, row("aaa", "Huddle", "Available", "Healthy"), row("bbb", "Huddle", "Available", "Healthy")]));
+  const text = (await import("../src/diagnose.ts")).diagnosisText(d);
+  assert.match(text, /Huddle \(Zoom room aaa\)/);
+  assert.doesNotMatch(text, /\(Zoom room aaa\) \(aaa\)/);
+});

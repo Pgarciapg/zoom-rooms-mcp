@@ -26,7 +26,7 @@ export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<
     // "Room 2" before "Room 10".
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
     // Two free rooms here with the same name: add Zoom's room id, so a meeting is not moved into the wrong one.
-    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id).slice(0, 24)})` } : r));
+    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id)})` } : r));
 };
 
 /** "A", "A and B", "A, B and C". */
