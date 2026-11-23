@@ -45,7 +45,7 @@ export const paint = (data: AttentionCard) => {
           if (room.inMeeting) badges.push(el("span", { class: "badge meeting", title: "A meeting is running in this room now" }, free.length ? `In a meeting: fix after it ends, or move it to ${free[0]!.name}` : taken ? `In a meeting: fix after it ends; ${taken}` : "In a meeting: fix after it ends"));
           const body: Node[] = [];
           if (room.issues.length)
-            body.push(el("ul", { class: "issues" }, ...room.issues.map((i) => el("li", {}, i.issue, ...(i.since ? [el("span", { class: "since" }, ` since ${i.since}`)] : [])))));
+            body.push(el("ul", { class: "issues" }, ...room.issues.map((i) => el("li", {}, i.issue, ...(i.since ? [el("span", { class: "since" }, ` since ${i.since}${(i as { age?: string | null }).age ? `, ${(i as { age?: string | null }).age} ago` : ""}`)] : [])))));
           if (room.devices.length) body.push(el("p", { class: "devices" }, el("b", {}, "Not online"), room.devices.join("; ")));
           body.push(el("p", { class: "next" }, el("b", {}, "Next"), room.next));
           return el(

@@ -6,6 +6,7 @@
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
 import { allocateMoveTo, freeRoomsIn } from "./move-to.ts";
+import { ago } from "./ago.ts";
 
 export type Level = "critical" | "warning";
 
@@ -13,6 +14,8 @@ export interface RoomIssue {
   issue: string;
   severity: string;
   since: string | null;
+  /** How long it has been open ("about 3 h"), when `since` is a readable past time. Attention list only. */
+  age?: string | null;
 }
 
 export interface AttentionRoom {
@@ -66,12 +69,14 @@ export const levelOf = (room: any): Level | null => {
 };
 
 /** Plain next step from the open issue and device text. The most specific rule wins. */
-export const nextStep = (room: Pick<AttentionRoom, "status" | "issues" | "devices" | "lastOnline">): string => {
+export const nextStep = (room: Pick<AttentionRoom, "status" | "issues" | "devices" | "lastOnline">, now?: number): string => {
   // An offline room computer comes first: nothing else in the room can be checked until it is back.
   const offline = room.status.toLowerCase() === "offline";
   const specific = deviceStep(room);
+  // How long, by diagnose_room's rule; no age when the time is unreadable or later than now.
+  const gone = now === undefined ? null : ago(room.lastOnline, now);
   if (offline)
-    return `The room computer is offline${room.lastOnline ? ` (last online ${room.lastOnline})` : ""}: check its power and network, then restart Zoom Rooms.${specific ? ` Then: ${specific}` : ""}`;
+    return `The room computer is offline${room.lastOnline ? ` (last online ${room.lastOnline}${gone ? `, ${gone} ago` : ""})` : ""}: check its power and network, then restart Zoom Rooms.${specific ? ` Then: ${specific}` : ""}`;
   return specific ?? "Open the room in the Zoom admin portal and read its full alert.";
 };
 
@@ -88,7 +93,7 @@ export const deviceStep = (room: Pick<AttentionRoom, "issues" | "devices">): str
   return null;
 };
 
-export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DETAIL_LIMIT): Promise<Attention> => {
+export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DETAIL_LIMIT, now = Date.now()): Promise<Attention> => {
   const couldNotCheck: string[] = [];
   let rooms: any[];
   try {
@@ -130,7 +135,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       // A location code gets its name from Zoom's location tree (read once per call, only when needed).
       const code = str(detail?.location_id) || str(r.location_id);
       const where = fromDetail || (code ? await places.name(code) : null);
-      const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null }));
+      const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null, age: i.since ? ago(str(i.since), now) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${str(d.name) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
       // Exactly "In Meeting" (any case or spacing): "Not in meeting" is not a meeting.
@@ -139,7 +144,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const candidates = inMeeting
         ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean)))
         : [];
-      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base), moveTo: candidates, moveToNote: null };
+      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base, now), moveTo: candidates, moveToNote: null };
     }),
   );
   // Within a level: offline first, then the oldest open issue first.
@@ -161,7 +166,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     detailed.forEach((room, i) => {
       const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
-      for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since})` : ""}.`);
+      for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since}${issue.age ? `, ${issue.age} ago` : ""})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);
       lines.push(`   Next: ${room.next}`);
     });

@@ -8,6 +8,7 @@ import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
 import { cleanName, freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
+import { ago } from "./ago.ts";
 
 export type FindingLevel = "critical" | "warning";
 
@@ -92,16 +93,7 @@ const namesKind = (issue: string, device: DeviceRow): boolean =>
 
 const levelOfSeverity = (severity: string): FindingLevel => (/crit|high|severe|error|major|\bp1\b/i.test(severity) ? "critical" : "warning");
 
-/** "about 3 h" / "about 4 days", or null when the time is missing, unreadable or in the future. */
-export const ago = (iso: string | null, now: number): string | null => {
-  if (!iso) return null;
-  const at = Date.parse(iso);
-  if (Number.isNaN(at) || at > now) return null;
-  const hours = (now - at) / 3_600_000;
-  if (hours < 1) return "under an hour";
-  if (hours < 48) return `about ${Math.round(hours)} h`;
-  return `about ${Math.round(hours / 24).toLocaleString("en-US")} days`;
-};
+export { ago } from "./ago.ts";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const GENERIC_DEVICE_CHECK = "Check the device's power and cable, then look at it in the Zoom admin portal.";
