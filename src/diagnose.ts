@@ -60,6 +60,8 @@ export interface RoomDiagnosis {
 
 /** Most free rooms named; the rest are counted. */
 export const MOVE_TO_LIMIT = 3;
+/** A room name as shown in a one-line suggestion: no line breaks or control characters, short. */
+const cleanName = (n: string) => n.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 60);
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -130,6 +132,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   let listed: any = isObj(listedRow) ? listedRow : null;
   // The room list, when it was read here (kept so looking for a free room does not read it again).
   let roomList: { rooms: any[]; partial: boolean } | null = null;
+  let roomListError: string | null = null;
   if (!listed && (!str(detail?.status) || !str(detail?.health))) {
     try {
       const all = (await client.listRooms()) as any;
@@ -138,6 +141,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
       listed = rooms.find((r) => isObj(r) && (str(r.id) === roomId || str(r.room_id) === roomId)) ?? null;
       if (!listed && detail) couldNotCheck.push(`Status and health: room ${roomId} is not in the room list.`);
     } catch (error) {
+      roomListError = msg(error);
       couldNotCheck.push(`Status and health (room list): ${msg(error)}`);
     }
   }
@@ -272,22 +276,27 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   let moveTo: RoomDiagnosis["moveTo"] = null;
   if (opts.moveTo && findings.length > 0) {
     try {
+      // A room list that already failed here is not read again.
+      if (roomListError) throw new Error(roomListError);
       if (!roomList) {
         const all = (await client.listRooms()) as any;
         roomList = { rooms: Array.isArray(all) ? all : arr(all?.rooms), partial: typeof all?.next_page_token === "string" && !!all.next_page_token };
       }
       const self = new Set([roomId, room.id, str(detail?.room_id), str(listed?.room_id)].filter(Boolean));
-      // The room's own location code: from its detail, or its row in the list (a detail with building and floor text
-      // often carries no code).
+      // The room's location codes: from its detail and its row in the list (a detail with building and floor text often
+      // carries no code). Either one counts, so a detail and a list that disagree never hide a free room.
       const ownRow = roomList.rooms.find((r) => isObj(r) && (self.has(str(r.id)) || self.has(str(r.room_id))));
-      const myLoc = locId || str(ownRow?.location_id);
-      if (!myLoc) moveTo = { rooms: [], more: 0, note: "Zoom gives no location for this room, so no room nearby could be suggested." };
+      const mine = new Set([locId, str(ownRow?.location_id), str(listed?.location_id)].filter(Boolean));
+      if (!mine.size)
+        moveTo = { rooms: [], more: 0, note: roomList.partial && !ownRow ? "This room's location was not in the part of Zoom's room list that was read, so no room nearby could be suggested." : "Zoom gives no location for this room, so no room nearby could be suggested." };
       else {
+        const seen = new Set<string>();
         const free = roomList.rooms
           .filter(isObj)
-          .filter((r) => !self.has(str(r.id)) && !self.has(str(r.room_id)))
-          .filter((r) => str(r.location_id) === myLoc && /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health)))
-          .map((r) => ({ id: str(r.id) || str(r.room_id), name: str(r.name) || str(r.id) || str(r.room_id) }))
+          .filter((r) => !!(str(r.id) || str(r.room_id)) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
+          .filter((r) => mine.has(str(r.location_id)) && /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health)))
+          .map((r) => ({ id: str(r.id) || str(r.room_id), name: cleanName(str(r.name) || str(r.id) || str(r.room_id)) }))
+          .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
           .sort((a, b) => a.name.localeCompare(b.name));
         const partial = roomList.partial ? "Only part of Zoom's room list was read, so there may be more." : null;
         moveTo = { rooms: free.slice(0, MOVE_TO_LIMIT), more: Math.max(0, free.length - MOVE_TO_LIMIT), note: partial };
@@ -297,8 +306,12 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     }
   }
   const freeNames = moveTo?.rooms.length ? `${moveTo.rooms.map((r) => r.name).join(", ")}${moveTo.more ? ` (+${moveTo.more} more)` : ""}` : "";
+  // The summary always says what the look found: rooms, none, or that it could not look.
+  const lookLine = !moveTo ? "" : freeNames
+    ? (room.inMeeting ? "" : ` Free now in the same Zoom location: ${freeNames}.`) + (moveTo.note ? ` ${moveTo.note}` : "")
+    : moveTo.note && /^(Could not|Zoom gives no|This room's location)/.test(moveTo.note) ? " Could not look for a free room nearby." : ` No other room in the same Zoom location is free and healthy right now.${moveTo.note ? ` ${moveTo.note}` : ""}`;
   const head = `${room.name}${room.where ? ` (${room.where})` : ""}`;
-  const meeting = room.inMeeting ? ` A meeting is running in it right now: fix after it ends${freeNames ? `, or move it to ${moveTo!.rooms[0]!.name}, free now in the same place` : ""}.` : "";
+  const meeting = room.inMeeting ? ` A meeting is running in it right now: fix after it ends${freeNames ? `, or move it to ${moveTo!.rooms[0]!.name}, free now in the same Zoom location` : ""}.` : "";
   let summary: string;
   if (allClear) summary = `${head}: all clear. Health is ${room.health}, the room computer is ${room.status}, and ${devices.length === 1 ? "its 1 device is online" : `all ${devices.length} devices are online`}.${meeting}`;
   else if (findings.length === 0) summary = `${head}: no problems found in what could be read, but not everything could be checked (${couldNotCheck.length}). This is not an all-clear.${meeting}`;
@@ -307,7 +320,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     const warn = findings.length - crit;
     const counts = [crit ? `${crit} critical` : "", warn ? `${warn} warning` : ""].filter(Boolean).join(", ");
     const top = findings[0]!;
-    summary = `${head}: ${counts}. Start with ${top.subject}: ${top.check}${meeting}${!room.inMeeting && freeNames ? ` Free now in the same place: ${freeNames}.` : ""}${couldNotCheck.length ? ` Not everything could be checked (${couldNotCheck.length}).` : ""}`;
+    summary = `${head}: ${counts}. Start with ${top.subject}: ${top.check}${meeting}${lookLine}${couldNotCheck.length ? ` Not everything could be checked (${couldNotCheck.length}).` : ""}`;
   }
   return { summary, view: "room-diagnosis", room, findings, devices, couldNotCheck, allClear, placeNote, moveTo };
 };
@@ -321,9 +334,9 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
   }
   if (d.moveTo) {
     const m = d.moveTo;
-    const where = d.room?.where ? ` (${d.room.where})` : "";
-    if (m.rooms.length) lines.push("", `Free now in the same place${where}, healthy and not in a meeting: ${m.rooms.map((r) => `${r.name} (${r.id})`).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
-    else lines.push("", m.note && /^(Could not|Zoom gives no)/.test(m.note) ? m.note : `No other room in the same place is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
+    // "Same Zoom location", not the floor: a location code can be a whole building.
+    if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map((r) => `${r.name} (${r.id})`).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
+    else lines.push("", m.note && /^(Could not|Zoom gives no|This room's location)/.test(m.note) ? m.note : `No other room in the same Zoom location is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
   }
   if (d.devices.length) lines.push("", "Devices:", ...d.devices.map((x) => `- ${x.name} (${x.type}): ${x.status}${x.firmware ? `, firmware ${x.firmware}` : ""}`));
   if (d.couldNotCheck.length) lines.push("", "Could not check:", ...d.couldNotCheck.map((c) => `- ${c}`));

@@ -41,8 +41,8 @@ test("names free, healthy rooms in the same place, and never busy, offline, unhe
     row("r8", "Room 501", "Available", "Healthy", "L5"),
   ]));
   assert.deepEqual(d.moveTo, { rooms: [{ id: "r3", name: "Room 401" }, { id: "r2", name: "Room 402" }], more: 0, note: null });
-  assert.match(d.summary, /A meeting is running in it right now: fix after it ends, or move it to Room 401, free now in the same place\./);
-  assert.match(diagnosisText(d), /Free now in the same place \(L4\), healthy and not in a meeting: Room 401 \(r3\), Room 402 \(r2\)\./);
+  assert.match(d.summary, /A meeting is running in it right now: fix after it ends, or move it to Room 401, free now in the same Zoom location\./);
+  assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Room 401 \(r3\), Room 402 \(r2\)\./);
 });
 
 test("at most three are named; the rest are counted", async () => {
@@ -55,7 +55,7 @@ test("at most three are named; the rest are counted", async () => {
 test("none free says so plainly", async () => {
   const d = await run(fake([broken, row("r2", "Room 402", "In Meeting", "Healthy")]));
   assert.deepEqual(d.moveTo, { rooms: [], more: 0, note: null });
-  assert.match(diagnosisText(d), /No other room in the same place is healthy and free right now\./);
+  assert.match(diagnosisText(d), /No other room in the same Zoom location is healthy and free right now\./);
   assert.doesNotMatch(d.summary, /move it to/);
 });
 
@@ -102,5 +102,45 @@ test("diagnose_room over MCP names the free rooms on the demo's 4th floor", asyn
   await Promise.all([client.connect(a), server.connect(b)]);
   const r = (await client.callTool({ name: "diagnose_room", arguments: { roomId: "rm-001" } })) as any;
   assert.deepEqual(r.structuredContent.moveTo.rooms.map((x: any) => x.name), ["Room 401", "Room 402"]);
-  assert.match(r.content[0].text, /Free now in the same place: Room 401, Room 402\./);
+  assert.match(r.content[0].text, /Free now in the same Zoom location: Room 401, Room 402\./);
+});
+
+// From the Sonnet adversarial review (2026-11-23).
+test("the summary always says what the look found: none free, could not look, or may be more", async () => {
+  const none = await run(fake([broken, row("r2", "Room 402", "In Meeting", "Healthy")]));
+  assert.match(none.summary, /No other room in the same Zoom location is free and healthy right now\./);
+  const failed = await run(fake(new Error("Zoom API 429")));
+  assert.match(failed.summary, /Could not look for a free room nearby\./);
+  const partial = await run(fake([broken, row("r2", "Room 402", "Available", "Healthy")], { nextPage: "tok" }));
+  assert.match(partial.summary, /Only part of Zoom's room list was read, so there may be more\./);
+});
+
+test("the text never claims the same floor: a location code can be a whole building", async () => {
+  const d = await run(fake([broken, row("r2", "Room on 9", "Available", "Healthy")]));
+  assert.doesNotMatch(diagnosisText(d), /same place/);
+  assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Room on 9 \(r2\)\./);
+});
+
+test("a partial list without the room's own row says so, not 'no location'", async () => {
+  const d = await run(fake([row("r2", "Room 402", "Available", "Healthy")], { detailLoc: null, nextPage: "tok" }));
+  assert.equal(d.moveTo?.note, "This room's location was not in the part of Zoom's room list that was read, so no room nearby could be suggested.");
+});
+
+test("duplicate rows, rows with no id, and odd names are handled", async () => {
+  const d = await run(fake([broken, row("r2", "Room A", "Available", "Healthy"), row("r2", "Room A", "Available", "Healthy"), row("", "", "Available", "Healthy"), row("r3", "Room\nB (+9 more)", "Available", "Healthy")]));
+  assert.deepEqual(d.moveTo?.rooms, [{ id: "r2", name: "Room A" }, { id: "r3", name: "Room B (+9 more)" }]);
+  assert.doesNotMatch(d.summary, /\n/);
+});
+
+test("a detail and list row that disagree on the code both count", async () => {
+  const d = await run(fake([{ ...broken, location_id: "L9" }, row("r2", "Room 902", "Available", "Healthy", "L9")]));
+  assert.deepEqual(d.moveTo?.rooms.map((r) => r.name), ["Room 902"]);
+});
+
+test("a room list that already failed is not read again", async () => {
+  const calls = { n: 0 };
+  const client: ZoomRoomsClient = { ...fake(new Error("Zoom API 503"), { listCalls: calls }), getRoom: async () => ({ id: "r1", name: "Board Room", location_id: "L4", issues: [{ issue: "Camera disconnected", severity: "critical" }] }) };
+  const d = await diagnoseRoom(client, "r1", NOW, undefined, undefined, { moveTo: true });
+  assert.equal(calls.n, 1);
+  assert.match(d.moveTo!.note!, /^Could not read the room list/);
 });
