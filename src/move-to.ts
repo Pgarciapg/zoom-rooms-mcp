@@ -40,9 +40,12 @@ export const allocateMoveTo = (
   wanted: { name: string; candidates: { id: string; name: string }[] }[],
 ): { moveTo: { id: string; name: string }[]; moveToNote: string | null }[] => {
   const givenTo = new Map<string, string>(); // free room id -> the meeting room it was suggested for
-  const picks = wanted.map(({ name, candidates }) => {
-    const pick = candidates.find((c) => !givenTo.has(c.id)) ?? null;
-    if (pick) givenTo.set(pick.id, name);
+  const picks = wanted.map(({ name, candidates }, i) => {
+    // Among the rooms still open, take the one fewest later meetings could use, so a later meeting with a single option
+    // is not stranded (A can use R1 or R2, B only R1: A gets R2). Ties keep name order.
+    const later = (id: string) => wanted.slice(i + 1).filter((w) => w.candidates.some((c) => c.id === id)).length;
+    const pick = candidates.filter((c) => !givenTo.has(c.id)).reduce<{ id: string; name: string } | null>((best, c) => (!best || later(c.id) < later(best.id) ? c : best), null);
+    if (pick) givenTo.set(pick.id, cleanName(name) || "another room");
     return pick;
   });
   return wanted.map(({ candidates }, i) => {

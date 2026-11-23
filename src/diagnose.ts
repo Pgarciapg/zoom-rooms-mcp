@@ -4,9 +4,9 @@
 // worst first, each with one check. Read-only: it only calls getRoom and getRoomDevices, plus listRooms when the room
 // detail does not carry its status or health, and listLocations to name a place Zoom gives only as a location code. Anything it could not read is listed apart, and it never reports all
 // clear while something could not be read.
-import { deviceStep, type RoomIssue } from "./attention.ts";
+import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
-import { freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
+import { cleanName, freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 
 export type FindingLevel = "critical" | "warning";
@@ -290,7 +290,16 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
       else {
         const free = freeRoomsIn(roomList.rooms, self, mine);
         const partial = roomList.partial ? "Only part of Zoom's room list was read, so there may be more." : null;
-        moveTo = { rooms: free.slice(0, MOVE_TO_LIMIT), more: Math.max(0, free.length - MOVE_TO_LIMIT), note: partial };
+        // Other problem rooms here in a meeting may be given these free rooms first by get_rooms_needing_attention
+        // (each meeting gets a different one there), so this answer says so rather than contradict it.
+        const rivals = !room.inMeeting || !free.length ? [] : roomList.rooms
+          .filter((r): r is Record<string, unknown> => isObj(r) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
+          .filter((r) => mine.has(str(r.location_id)) && /^\s*in ?meeting\s*$/i.test(str(r.status)) && levelOf(r) !== null)
+          .map((r) => cleanName(str(r.name)) || cleanName(str(r.id) || str(r.room_id)) || "another room");
+        const shared = rivals.length
+          ? `${rivals.length === 1 ? `Another problem room here, ${rivals[0]}, is` : `${rivals.length} other problem rooms here (${rivals.slice(0, MOVE_TO_LIMIT).join(", ")}${rivals.length > MOVE_TO_LIMIT ? ", ..." : ""}) are`} also in a meeting; get_rooms_needing_attention gives each meeting a different free room.`
+          : null;
+        moveTo = { rooms: free.slice(0, MOVE_TO_LIMIT), more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
       }
     } catch (error) {
       moveTo = { rooms: [], more: 0, note: `Could not read the room list, so no free room nearby could be looked for (${msg(error)}).` };

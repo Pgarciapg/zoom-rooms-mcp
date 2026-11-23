@@ -261,3 +261,33 @@ test("several free rooms all taken are listed by name, and a room not in a meeti
   assert.equal(by["B Room"]!.moveTo[0]!.name, "Room 402");
   assert.equal(by["C Room"]!.moveToNote, "the 2 free rooms in the same Zoom location (Room 401, Room 402) are suggested for A Room and B Room");
 });
+
+// From the Sonnet review of the allocation (2026-11-23).
+import { allocateMoveTo } from "../src/move-to.ts";
+
+test("a room with two options leaves the only option of a later room alone", () => {
+  const r1 = { id: "R1", name: "Room 1" }, r2 = { id: "R2", name: "Room 2" };
+  const out = allocateMoveTo([{ name: "A", candidates: [r1, r2] }, { name: "B", candidates: [r1] }]);
+  assert.equal(out[0]!.moveTo[0]!.id, "R2");
+  assert.equal(out[1]!.moveTo[0]!.id, "R1");
+  assert.equal(out[1]!.moveToNote, null);
+});
+
+test("a taker's name in the note is cleaned to one short line", () => {
+  const r1 = { id: "R1", name: "Room 1" };
+  const out = allocateMoveTo([{ name: "Board\nRoom", candidates: [r1] }, { name: "B", candidates: [r1] }]);
+  assert.equal(out[1]!.moveToNote, "the only free room in the same Zoom location, Room 1, is suggested for Board Room");
+});
+
+test("diagnose_room says when another problem room nearby is also in a meeting, so it does not contradict the list", async () => {
+  const d = await run(fake([
+    broken,
+    row("h4", "Huddle 4", "In Meeting", "Warning"),
+    row("ok", "Room 403", "In Meeting", "Healthy"),
+    row("f1", "Room 401", "Available", "Healthy"),
+  ]));
+  assert.match(d.summary, /Another problem room here, Huddle 4, is also in a meeting; get_rooms_needing_attention gives each meeting a different free room\./);
+  assert.doesNotMatch(d.summary, /Room 403, is also/);
+  const alone = await run(fake([broken, row("ok", "Room 403", "In Meeting", "Healthy"), row("f1", "Room 401", "Available", "Healthy")]));
+  assert.doesNotMatch(alone.summary, /also in a meeting/);
+});
