@@ -2,9 +2,10 @@
 // this one answers for a single room: every problem it can see (the room computer, each open issue, each device that is
 // not online), with the open issue and the failing device joined into one finding when they describe the same thing,
 // worst first, each with one check. Read-only: it only calls getRoom and getRoomDevices, plus listRooms when the room
-// detail does not carry its status or health. Anything it could not read is listed apart, and it never reports all
+// detail does not carry its status or health, and listLocations to name a place Zoom gives only as a location code. Anything it could not read is listed apart, and it never reports all
 // clear while something could not be read.
 import { deviceStep, type RoomIssue } from "./attention.ts";
+import { PlaceNamer } from "./locations.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 
 export type FindingLevel = "critical" | "warning";
@@ -47,6 +48,8 @@ export interface RoomDiagnosis {
   devices: DeviceRow[];
   couldNotCheck: string[];
   allClear: boolean;
+  /** Why this room's place shows a Zoom location code instead of a name, or null. Never affects allClear. */
+  placeNote: string | null;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
@@ -96,7 +99,7 @@ const GENERIC_DEVICE_CHECK = "Check the device's power and cable, then look at i
 const GENERIC_ISSUE_CHECK = "Open the room in the Zoom admin portal and read its full alert.";
 
 /** Pass `listed` (the room's row from listRooms) when you already have it, so the room list is not read again. */
-export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown): Promise<RoomDiagnosis> => {
+export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown, places = new PlaceNamer(client)): Promise<RoomDiagnosis> => {
   const couldNotCheck: string[] = [];
   let detail: any = null;
   let deviceData: unknown[] | null = null;
@@ -129,10 +132,11 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
 
   if (!detail && !listed) {
     const summary = `Could not check room ${roomId}: ${couldNotCheck[0]?.replace(/^[^:]+: /, "") ?? "it did not answer"}. This is not an all-clear.`;
-    return { summary, view: "room-diagnosis", room: null, findings: [], devices: [], couldNotCheck, allClear: false };
+    return { summary, view: "room-diagnosis", room: null, findings: [], devices: [], couldNotCheck, allClear: false, placeNote: null };
   }
 
   const loc = detail?.location;
+  let placeNote: string | null = null;
   const room: RoomFacts = {
     id: str(detail?.id) || str(listed?.id) || roomId,
     name: str(detail?.name) || str(listed?.name) || roomId,
@@ -154,8 +158,10 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     room.where = `${building}, ${floorName}`;
     room.placeKey = key(room.where);
   } else if (locText || locId) {
-    room.where = locText || locId;
-    room.placeKey = key(room.where);
+    // A location code gets its name from Zoom's location tree; the group key stays the code.
+    room.placeKey = key(locText || locId);
+    room.where = locText || (await places.name(locId));
+    if (!locText && room.where === locId) placeNote = places.note();
   } else room.where = [building, floorName].filter(Boolean).join(", ") || null;
   const offline = room.status.toLowerCase() === "offline";
   if (!offline && !UP_STATUS.test(room.status)) couldNotCheck.push(`Status: "${room.status || "not reported"}", so the room computer could not be classed as up.`);
@@ -255,7 +261,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     const top = findings[0]!;
     summary = `${head}: ${counts}. Start with ${top.subject}: ${top.check}${meeting}${couldNotCheck.length ? ` Not everything could be checked (${couldNotCheck.length}).` : ""}`;
   }
-  return { summary, view: "room-diagnosis", room, findings, devices, couldNotCheck, allClear };
+  return { summary, view: "room-diagnosis", room, findings, devices, couldNotCheck, allClear, placeNote };
 };
 
 /** The diagnosis as plain text: summary, findings worst first, every device, and what could not be checked. */
@@ -267,5 +273,6 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
   }
   if (d.devices.length) lines.push("", "Devices:", ...d.devices.map((x) => `- ${x.name} (${x.type}): ${x.status}${x.firmware ? `, firmware ${x.firmware}` : ""}`));
   if (d.couldNotCheck.length) lines.push("", "Could not check:", ...d.couldNotCheck.map((c) => `- ${c}`));
+  if (d.placeNote) lines.push("", d.placeNote);
   return lines.join("\n");
 };

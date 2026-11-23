@@ -47,7 +47,7 @@ test("demo healthy room is a real all-clear, and a meeting in progress is called
   const d = await diagnoseRoom(demo(), "rm-005", NOW);
   assert.equal(d.allClear, true);
   assert.equal(d.room?.inMeeting, true);
-  assert.equal(d.summary, "Huddle B (bldg-1-floor-1): all clear. Health is Healthy, the room computer is In Meeting, and all 2 devices are online. A meeting is running in it right now: fix after it ends.");
+  assert.equal(d.summary, "Huddle B (Building 1, 1st Floor): all clear. Health is Healthy, the room computer is In Meeting, and all 2 devices are online. A meeting is running in it right now: fix after it ends.");
 });
 
 test("unknown room: a clear could-not-check, never a made-up room", async () => {

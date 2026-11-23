@@ -103,3 +103,25 @@ export const EARLIER_DEVICES: Record<string, unknown> = {
     { id: "rm-016-disp", device_type: "Display", name: "Display", status: "Offline", firmware: "1.0" },
   ] },
 };
+
+/** The demo campus's location tree, shaped like GET /rooms/locations: country down to floor, each with its parent. */
+const ordinal = (n: number) => `${n}${n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th"} Floor`;
+const floors = (building: number, count: number) =>
+  Array.from({ length: count }, (_, i) => ({ id: `bldg-${building}-floor-${i + 1}`, name: ordinal(i + 1), type: "floor", parent_location_id: `bldg-${building}` }));
+export const MOCK_LOCATIONS = {
+  page_size: 300,
+  next_page_token: "",
+  locations: [
+    { id: "loc-us", name: "United States", type: "country", parent_location_id: "" },
+    { id: "loc-il", name: "Illinois", type: "states", parent_location_id: "loc-us" },
+    { id: "loc-chi", name: "Chicago", type: "city", parent_location_id: "loc-il" },
+    { id: "campus-main", name: "Main Campus", type: "campus", parent_location_id: "loc-chi" },
+    { id: "campus-outdoor", name: "Outdoor Pavilion", type: "building", parent_location_id: "campus-main" },
+    { id: "bldg-1", name: "Building 1", type: "building", parent_location_id: "campus-main" },
+    { id: "bldg-2", name: "Building 2", type: "building", parent_location_id: "campus-main" },
+    { id: "bldg-3", name: "Building 3", type: "building", parent_location_id: "campus-main" },
+    ...floors(1, 5),
+    ...floors(2, 2),
+    ...floors(3, 1),
+  ],
+};

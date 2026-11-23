@@ -1,11 +1,13 @@
 import { getAccessToken, type ZoomCredentials } from "./auth.ts";
-import { EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
+import { EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_LOCATIONS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
 
 /** The read-only Zoom Rooms calls the MCP tools need. */
 export interface ZoomRoomsClient {
   listRooms(): Promise<unknown>;
   getRoom(roomId: string): Promise<unknown>;
   getRoomDevices(roomId: string): Promise<unknown>;
+  /** Zoom's location tree (names for location codes). Optional: a client without it shows places as codes. */
+  listLocations?(): Promise<unknown>;
 }
 
 export const DEFAULT_BASE_URL = "https://api.zoom.us/v2";
@@ -75,6 +77,26 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
   getRoomDevices(roomId: string) {
     return this.request(`/rooms/${encodeURIComponent(roomId)}/devices`);
   }
+
+  /** Every Zoom Rooms location (country down to floor), across all pages, with the same page guards as the room list. */
+  async listLocations() {
+    const locations: unknown[] = [];
+    const seen = new Set<string>();
+    let token = "";
+    let last: any = {};
+    for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
+      const query = `page_size=${ROOM_PAGE_SIZE}${token ? `&next_page_token=${encodeURIComponent(token)}` : ""}`;
+      last = await this.request(`/rooms/locations?${query}`);
+      const batch = (last as any)?.locations;
+      if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the location list in an unexpected shape.`);
+      locations.push(...(batch ?? []));
+      token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
+      if (!token) return { ...last, locations, page_count: page, next_page_token: "" };
+      if (seen.has(token)) throw new ZoomApiError(502, `Zoom repeated a page token on page ${page} of the location list; stopped so locations are not read twice.`);
+      seen.add(token);
+    }
+    return { ...last, locations, page_count: MAX_ROOM_PAGES, next_page_token: token };
+  }
 }
 
 type DemoRoom = (typeof MOCK_ROOMS.rooms)[number];
@@ -89,6 +111,10 @@ export class DemoZoomRoomsClient implements ZoomRoomsClient {
 
   async listRooms() {
     return MOCK_ROOMS;
+  }
+
+  async listLocations() {
+    return MOCK_LOCATIONS;
   }
 
   async getRoom(roomId: string) {

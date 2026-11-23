@@ -11,6 +11,7 @@
 // "no shared cause" without saying which rooms it did not get to.
 import { levelOf } from "./attention.ts";
 import type { ZoomRoomsClient } from "./client.ts";
+import { PlaceNamer } from "./locations.ts";
 import { diagnoseRoom, FAILURE, UP_STATUS, type FindingLevel, type RoomDiagnosis } from "./diagnose.ts";
 
 export type PatternKind = "location-offline" | "same-model" | "same-firmware" | "same-problem";
@@ -48,6 +49,8 @@ export interface RoomsDiagnosis {
   notDiagnosed: string[];
   couldNotCheck: string[];
   allClear: boolean;
+  /** Why any place shows a Zoom location code instead of a name, or null. Never affects allClear. */
+  placeNote: string | null;
 }
 
 /** Problem rooms diagnosed per call, the same cap as get_rooms_needing_attention. */
@@ -214,7 +217,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     if (str(all?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };
+    return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, placeNote: null };
   }
 
   // A room listed twice is one room.
@@ -238,7 +241,10 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     .filter((x) => x.level !== null)
     .sort((a, b) => (a.level === b.level ? Number(str(b.r.status).toLowerCase() === "offline") - Number(str(a.r.status).toLowerCase() === "offline") : a.level === "critical" ? -1 : 1));
 
-  const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r)));
+  // One location-list read shared by every room in this call.
+  const places = new PlaceNamer(client);
+  const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r, places)));
+  const placeNote = places.note();
   const notDiagnosed = problems.slice(limit).map(({ r }) => str(r.name) || str(r.id));
   const patterns = findPatterns(diagnoses);
 
@@ -278,5 +284,6 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     if (notDiagnosed.length) lines.push(`${plural(notDiagnosed.length, "more problem room")} not diagnosed in this call: ${names(notDiagnosed, 10)}.`);
   }
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
-  return { summary: lines.join("\n"), view: "rooms-diagnosis", total: rooms.length, needAttention: problems.length, patterns, rooms: rows, notDiagnosed, couldNotCheck, allClear };
+  if (placeNote) lines.push("", placeNote);
+  return { summary: lines.join("\n"), view: "rooms-diagnosis", total: rooms.length, needAttention: problems.length, patterns, rooms: rows, notDiagnosed, couldNotCheck, allClear, placeNote };
 };

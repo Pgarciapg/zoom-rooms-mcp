@@ -47,7 +47,7 @@ Leave out `env` to run on demo data.
 
 ## Zoom credentials
 
-Create a **Server-to-Server OAuth** app at [marketplace.zoom.us](https://marketplace.zoom.us) and add the Zoom Rooms **read** scopes for listing rooms, room details and room devices (the app's Scopes page lists them). Then set:
+Create a **Server-to-Server OAuth** app at [marketplace.zoom.us](https://marketplace.zoom.us) and add the Zoom Rooms **read** scopes for listing rooms, room details and room devices (the app's Scopes page lists them). Add the scope for listing Zoom Rooms locations too, so places show as "Building 1, 4th Floor" instead of Zoom's location codes; without it everything still works and the reply says why places show codes. Then set:
 
 | Variable | What it is |
 |---|---|
@@ -64,10 +64,10 @@ If only some of the three are set, the server refuses to start and names what is
 
 | Tool | Zoom API | Returns |
 |---|---|---|
-| `get_rooms_needing_attention` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for each problem room | Start here: problem rooms worst first, with open issues, devices not online, whether a meeting is running now, and a plain next step. Never an all-clear while something could not be read |
+| `get_rooms_needing_attention` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for each problem room (plus `GET /rooms/locations` for place names) | Start here: problem rooms worst first, with open issues, devices not online, whether a meeting is running now, and a plain next step. Never an all-clear while something could not be read |
 | `what_changed` | `GET /rooms`, then `GET /rooms/{roomId}` and `/devices` for rooms that look unhappy now or did last time (up to 25) | What changed since the last run: rooms offline or back, health worse or better, issues opened or closed, devices down or recovered, rooms added or removed, worst first. Saves one private file per account (`~/.zoom-rooms-mcp/last-check-<account fingerprint>.json`, mode 600; `ZOOM_ROOMS_STATE` moves it). First run says there is nothing to compare. Anything not read now or last time is "not compared", never fixed. Rooms are only called added or removed between two full room lists. Demo compares against a built-in day-earlier campus in memory |
-| `diagnose_rooms` | `GET /rooms`, then `diagnose_room` for each problem room | Shared causes across problem rooms: room computers offline on the same floor, one device model or firmware failing in several rooms, the same problem in several rooms. Worst first, one check each, then a per-room list. Never an all-clear while something could not be read |
-| `diagnose_room` | `GET /rooms/{roomId}` and `/devices` (plus `GET /rooms` if the detail lacks status or health) | Why one room is unhappy and what to check first: the room computer, each open issue and each device not online, an issue and its failing device joined into one finding, worst first, one check each. Never an all-clear while something could not be read |
+| `diagnose_rooms` | `GET /rooms`, then `diagnose_room` for each problem room (one `GET /rooms/locations` shared by all) | Shared causes across problem rooms: room computers offline on the same floor, one device model or firmware failing in several rooms, the same problem in several rooms. Worst first, one check each, then a per-room list. Never an all-clear while something could not be read |
+| `diagnose_room` | `GET /rooms/{roomId}` and `/devices` (plus `GET /rooms` if the detail lacks status or health, and `GET /rooms/locations` for the place name) | Why one room is unhappy and what to check first: the room computer, each open issue and each device not online, an issue and its failing device joined into one finding, worst first, one check each. Never an all-clear while something could not be read |
 | `list_zoom_rooms` | `GET /rooms` (every page) | Every room with status and health. Reads all pages, up to 15,000 rooms; a page that fails fails the call, and past the cap the result keeps Zoom's `next_page_token` so it never passes as the whole list |
 | `get_zoom_room` | `GET /rooms/{roomId}` | One room's details and open issues |
 | `get_zoom_room_devices` | `GET /rooms/{roomId}/devices` | Cameras, mics, speakers, controllers, displays |
@@ -75,6 +75,8 @@ If only some of the three are set, the server refuses to start and names what is
 In hosts that support MCP Apps (Claude, ChatGPT), `get_rooms_needing_attention` also shows a card: each problem room worst first with its issues, the devices not online, an "in a meeting" flag and the next step. The card copies the tool result and loads nothing from the network. Other hosts get the same text and JSON as before.
 
 ![Rooms needing attention card on the demo campus](docs/card-attention.png)
+
+**Place names.** Zoom gives each room only a location code. The diagnosis tools read Zoom's location tree (every page, once per call, and only when a problem room needs a name) and show the two closest levels, such as "Building 1, 4th Floor". Rooms are still grouped by the code, so two "2nd Floor"s in different buildings never merge. If the location list cannot be read, places keep their codes, a `placeNote` line says why, and nothing else changes: it is never a could-not-check and never affects an all-clear.
 
 Each result has the raw JSON as text plus `structuredContent: { source: "zoom" | "demo", data }`. Unknown rooms come back as a clean tool error.
 

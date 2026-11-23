@@ -1,8 +1,10 @@
 // "Which rooms need attention right now?" (2026-11-17). The other tools return raw Zoom data; this one rolls the account
 // up: problem rooms worst first, each with its open issues, the devices that are not online, whether a meeting is running
-// in it right now, and a plain next step. Read-only: it only calls listRooms, getRoom and getRoomDevices. Anything it
+// in it right now, and a plain next step. Read-only: it only calls listRooms, getRoom and getRoomDevices, plus listLocations to name a place
+// Zoom gives only as a location code. Anything it
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
+import { PlaceNamer } from "./locations.ts";
 
 export type Level = "critical" | "warning";
 
@@ -37,6 +39,8 @@ export interface Attention {
   notReadInDetail: string[];
   couldNotCheck: string[];
   allClear: boolean;
+  /** Why any place shows a Zoom location code instead of a name, or null. Never affects allClear. */
+  placeNote: string | null;
 }
 
 /** Problem rooms read in detail per call; the rest are still counted and named. */
@@ -87,7 +91,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     if (typeof (list as any)?.next_page_token === "string" && (list as any).next_page_token) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false };
+    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, placeNote: null };
   }
 
   const unknownHealth = rooms.filter((r) => !levelOf(r) && !/^healthy$/i.test(str(r.health)));
@@ -98,6 +102,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     .filter((x): x is { r: any; level: Level } => x.level !== null)
     .sort((a, b) => (a.level === b.level ? Number(str(b.r.status).toLowerCase() === "offline") - Number(str(a.r.status).toLowerCase() === "offline") : a.level === "critical" ? -1 : 1));
 
+  const places = new PlaceNamer(client);
   const detailed = await Promise.all(
     problems.slice(0, limit).map(async ({ r, level }): Promise<AttentionRoom> => {
       const id = str(r.id);
@@ -115,7 +120,10 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
         couldNotCheck.push(`${name} devices: ${error instanceof Error ? error.message : String(error)}`);
       }
       const loc = detail?.location;
-      const where = loc && typeof loc === "object" ? [str(loc.building), str(loc.floor)].filter(Boolean).join(", ") || null : str(r.location_id) || null;
+      const fromDetail = loc && typeof loc === "object" ? [str(loc.building), str(loc.floor)].filter(Boolean).join(", ") : typeof loc === "string" ? str(loc) : "";
+      // A location code gets its name from Zoom's location tree (read once per call, only when needed).
+      const code = str(detail?.location_id) || str(r.location_id);
+      const where = fromDetail || (code ? await places.name(code) : null);
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${str(d.name) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
@@ -147,5 +155,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     lines.push("For one room's full answer, call diagnose_room with its id.");
   }
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
-  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear };
+  const placeNote = places.note();
+  if (placeNote) lines.push("", placeNote);
+  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear, placeNote };
 };
