@@ -76,7 +76,7 @@ In hosts that support MCP Apps (Claude, ChatGPT), `get_rooms_needing_attention` 
 
 ![Rooms needing attention card on the demo campus](docs/card-attention.png)
 
-**Place names.** Zoom gives each room only a location code. The diagnosis tools read Zoom's location tree (every page, once per call, and only when a problem room needs a name) and show the two closest levels, such as "Building 1, 4th Floor". Rooms are still grouped by the code, so two "2nd Floor"s in different buildings never merge. If the location list cannot be read, places keep their codes, a `placeNote` line says why, and nothing else changes: it is never a could-not-check and never affects an all-clear.
+**Place names.** Zoom gives each room only a location code. The diagnosis tools read Zoom's location tree (every page, once per call, and only when a problem room needs a name) and show the two closest levels, such as "Building 1, 4th Floor". Rooms are still grouped by the code, so two "2nd Floor"s in different buildings never merge, and two places that would read the same get their location code added. A floor whose building is missing from the list shows its partial name plus the code. If the location list cannot be read, places keep their codes, a `placeNote` line says why, and nothing else changes: it is never a could-not-check and never affects an all-clear.
 
 Each result has the raw JSON as text plus `structuredContent: { source: "zoom" | "demo", data }`. Unknown rooms come back as a clean tool error.
 

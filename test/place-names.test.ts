@@ -197,3 +197,75 @@ test("HTTP: a repeated page token or an odd page stops with an honest error", as
   serve(t, [page(TREE, "t1"), page(TREE, "t1")]);
   await assert.rejects(new HttpZoomRoomsClient(creds()).listLocations(), /repeated a page token on page 2 of the location list/);
 });
+
+// Review fixes (Sonnet adversarial review of ac972bd).
+const tree = (rows: any[], next = "") => async () => ({ locations: rows, next_page_token: next });
+
+test("review: a floor whose building is missing from the list keeps its code and says the name is partial", async () => {
+  const { client } = account([offline("a", "F"), offline("b", "F")], { locations: tree([{ id: "F", name: "4th Floor", type: "floor", parent_location_id: "B" }], "zz") });
+  const d = await diagnoseRooms(client, NOW);
+  assert.equal(d.patterns[0]!.title.replace(/, last online.*/, ""), "2 room computers offline on 4th Floor (location F)");
+  assert.equal(d.placeNote, "Place names: 1 place is shown with only part of the name, plus the location code, because a parent location is missing from Zoom's location list (it has more pages than were read). Grouping by place is not affected.");
+});
+
+test("review: two places that would read the same get their codes, so they never look like one place", async () => {
+  const rows = [{ id: "X1", name: "Floor 1", type: "floor", parent_location_id: "" }, { id: "X2", name: "floor 1", type: "floor", parent_location_id: "" }, { id: "X3", name: "Lobby", type: "floor", parent_location_id: "" }];
+  const { client } = account([offline("a", "X1"), offline("b", "X1"), offline("c", "X2"), offline("d", "X2"), offline("e", "X3")], { locations: tree(rows) });
+  const d = await diagnoseRooms(client, NOW);
+  const titles = d.patterns.map((p) => p.title.replace(/, last online.*/, "")).sort();
+  assert.deepEqual(titles, ["2 room computers offline on Floor 1 (location X1)", "2 room computers offline on floor 1 (location X2)"]);
+  assert.equal(d.placeNote, null, "a code added to tell places apart is not a problem to explain");
+  const a = await roomsNeedingAttention(client);
+  assert.ok(a.rooms.some((r) => r.where === "Lobby"), "a unique name gets no code");
+});
+
+test("review: a location with an empty name says Zoom has no name for it, not that the list lacks it", async () => {
+  const { client } = account([offline("a", "E")], { locations: tree([{ id: "E", name: "  ", type: "floor", parent_location_id: "" }]) });
+  const a = await roomsNeedingAttention(client);
+  assert.equal(a.rooms[0]!.where, "E");
+  assert.equal(a.placeNote, "Place names: 1 place is shown as its Zoom location code because Zoom has no name for it. Grouping by place is not affected.");
+});
+
+test("review: a place whose name equals its code is named, with no note", async () => {
+  const { client } = account([offline("a", "B1")], { locations: tree([{ id: "B1", name: "B1", type: "building", parent_location_id: "" }]) });
+  const d = await diagnoseRoom(client, "a", NOW);
+  assert.equal(d.room!.where, "B1");
+  assert.equal(d.placeNote, null);
+});
+
+test("review: a failed location read groups exactly like a named one and is still not an all-clear", async () => {
+  const rows = [offline("a", F4), offline("b", F4), offline("c", "F2a")];
+  const named = await diagnoseRooms(account(rows).client, NOW);
+  const failed = await diagnoseRooms(account(rows, { locations: async () => { throw new Error("403"); } }).client, NOW);
+  assert.equal(failed.allClear, false);
+  assert.deepEqual(failed.patterns.map((p) => p.roomIds), named.patterns.map((p) => p.roomIds));
+  assert.deepEqual(failed.couldNotCheck, named.couldNotCheck);
+  assert.deepEqual(failed.rooms, named.rooms);
+  assert.match(failed.placeNote ?? "", /^Place names: 2 places are shown as their Zoom location codes because Zoom's location list could not be read \(403\)/);
+});
+
+test("review: a location list in an odd shape is explained; a cut-short list names a code that is on it", async () => {
+  const odd = account([offline("a", F4)], { locations: async () => ({ locations: { id: F4 } }) });
+  assert.match((await roomsNeedingAttention(odd.client)).placeNote ?? "", /because Zoom's location list came back in an unexpected shape/);
+  const cut = account([offline("a", F4)], { locations: tree(TREE, "more") });
+  const a = await roomsNeedingAttention(cut.client);
+  assert.equal(a.rooms[0]!.where, "Building 1, 4th Floor");
+  assert.equal(a.placeNote, null);
+});
+
+test("review: in diagnose_rooms one room's code note covers only that room in its own diagnosis", async () => {
+  const { client } = account([offline("a", F4), offline("b", "GONE")]);
+  const named = await diagnoseRoom(client, "a", NOW);
+  assert.equal(named.placeNote, null);
+  const d = await diagnoseRooms(client, NOW);
+  assert.match(d.placeNote ?? "", /^Place names: 1 place is shown as its Zoom location code because Zoom's location list does not include it/);
+});
+
+test("review HTTP: a page with no locations field ends cleanly; a non-array page is an error", async (t) => {
+  serve(t, [() => new Response(JSON.stringify({ page_size: 300, next_page_token: "" }), { status: 200 })]);
+  assert.deepEqual(((await new HttpZoomRoomsClient(creds()).listLocations()) as any).locations, []);
+});
+test("review HTTP: a non-array locations page is an honest error", async (t) => {
+  serve(t, [() => new Response(JSON.stringify({ locations: { id: "x" } }), { status: 200 })]);
+  await assert.rejects(new HttpZoomRoomsClient(creds()).listLocations(), /page 1 of the location list in an unexpected shape/);
+});

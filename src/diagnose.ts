@@ -160,8 +160,13 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   } else if (locText || locId) {
     // A location code gets its name from Zoom's location tree; the group key stays the code.
     room.placeKey = key(locText || locId);
-    room.where = locText || (await places.name(locId));
-    if (!locText && room.where === locId) placeNote = places.note();
+    if (locText) room.where = locText;
+    else {
+      const label = await places.lookup(locId);
+      room.where = label.text;
+      // Only this room's own place: a namer shared across rooms keeps the call-wide note for diagnose_rooms.
+      if (label.issue) placeNote = places.note([locId]);
+    }
   } else room.where = [building, floorName].filter(Boolean).join(", ") || null;
   const offline = room.status.toLowerCase() === "offline";
   if (!offline && !UP_STATUS.test(room.status)) couldNotCheck.push(`Status: "${room.status || "not reported"}", so the room computer could not be classed as up.`);
