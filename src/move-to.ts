@@ -26,3 +26,34 @@ export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<
     // "Room 2" before "Room 10".
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 };
+
+/** "A", "A and B", "A, B and C". */
+const joinNames = (names: string[]) => (names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
+
+/**
+ * Several meetings displaced at once (2026-11-23): give each a different free room, in the order given (worst room
+ * first), so two meetings are never sent to the same room. Each room's list is its own pick first, then free rooms no
+ * other meeting was given. A room whose free rooms were all given away gets a note naming them and who they went to,
+ * instead of an empty or shared suggestion. Rooms with no candidates at all get no note.
+ */
+export const allocateMoveTo = (
+  wanted: { name: string; candidates: { id: string; name: string }[] }[],
+): { moveTo: { id: string; name: string }[]; moveToNote: string | null }[] => {
+  const givenTo = new Map<string, string>(); // free room id -> the meeting room it was suggested for
+  const picks = wanted.map(({ name, candidates }) => {
+    const pick = candidates.find((c) => !givenTo.has(c.id)) ?? null;
+    if (pick) givenTo.set(pick.id, name);
+    return pick;
+  });
+  return wanted.map(({ candidates }, i) => {
+    const pick = picks[i];
+    if (pick) return { moveTo: [pick, ...candidates.filter((c) => c.id !== pick.id && !givenTo.has(c.id))].slice(0, MOVE_TO_LIMIT), moveToNote: null };
+    if (!candidates.length) return { moveTo: [], moveToNote: null };
+    const takers = [...new Set(candidates.map((c) => givenTo.get(c.id)!))];
+    const shown = candidates.slice(0, MOVE_TO_LIMIT).map((c) => c.name).join(", ") + (candidates.length > MOVE_TO_LIMIT ? `, +${candidates.length - MOVE_TO_LIMIT} more` : "");
+    const note = candidates.length === 1
+      ? `the only free room in the same Zoom location, ${candidates[0]!.name}, is suggested for ${joinNames(takers)}`
+      : `the ${candidates.length} free rooms in the same Zoom location (${shown}) are suggested for ${joinNames(takers)}`;
+    return { moveTo: [], moveToNote: note };
+  });
+};

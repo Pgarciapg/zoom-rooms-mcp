@@ -5,7 +5,7 @@
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
-import { freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
+import { allocateMoveTo, freeRoomsIn } from "./move-to.ts";
 
 export type Level = "critical" | "warning";
 
@@ -28,8 +28,11 @@ export interface AttentionRoom {
   /** Devices whose status is not Online or Connected, e.g. "Logitech Rally (Camera): Disconnected". */
   devices: string[];
   next: string;
-  /** For a room in a meeting: up to three rooms in the same Zoom location that are free and healthy now (see move-to.ts). */
+  /** For a room in a meeting: up to three rooms in the same Zoom location that are free and healthy now, its own
+   * pick first; no two meetings are given the same first room (see move-to.ts). */
   moveTo: { id: string; name: string }[];
+  /** When every free room nearby was already suggested for a worse room above: which rooms, and for whom. */
+  moveToNote: string | null;
 }
 
 export interface Attention {
@@ -133,15 +136,17 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       // Exactly "In Meeting" (any case or spacing): "Not in meeting" is not a meeting.
       const inMeeting = /^\s*in ?meeting\s*$/i.test(str(r.status));
       // Where the meeting can go, from the room list already read (no extra Zoom call).
-      const moveTo = inMeeting
-        ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean))).slice(0, MOVE_TO_LIMIT)
+      const candidates = inMeeting
+        ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean)))
         : [];
-      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base), moveTo };
+      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base), moveTo: candidates, moveToNote: null };
     }),
   );
   // Within a level: offline first, then the oldest open issue first.
   const firstSince = (room: AttentionRoom) => room.issues.map((i) => i.since ?? "~").sort()[0] ?? "~";
   detailed.sort((a, b) => (a.level === b.level ? Number(b.status.toLowerCase() === "offline") - Number(a.status.toLowerCase() === "offline") || firstSince(a).localeCompare(firstSince(b)) : a.level === "critical" ? -1 : 1));
+  // Several meetings in the same place: each gets a different free room, worst room first (same order as the list).
+  allocateMoveTo(detailed.map((room) => ({ name: room.name, candidates: room.moveTo }))).forEach((m, i) => Object.assign(detailed[i]!, m));
 
   const counts = { critical: problems.filter((p) => p.level === "critical").length, warning: problems.filter((p) => p.level === "warning").length };
   const hidden = problems.length - detailed.length;
@@ -154,7 +159,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
     lines.push(`${problems.length} of ${rooms.length} rooms need attention: ${parts}.`);
     detailed.forEach((room, i) => {
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}, free now in the same Zoom location` : ""})` : ""}.`;
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);

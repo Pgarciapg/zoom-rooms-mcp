@@ -41,7 +41,8 @@ export const paint = (data: AttentionCard) => {
           const offline = room.status.toLowerCase() === "offline";
           const badges = [el("span", { class: `badge${offline ? " l-critical" : ""}` }, room.status || "No status")];
           const free = (room as { moveTo?: { name: string }[] }).moveTo ?? [];
-          if (room.inMeeting) badges.push(el("span", { class: "badge meeting", title: "A meeting is running in this room now" }, free.length ? `In a meeting: fix after it ends, or move it to ${free[0]!.name}` : "In a meeting: fix after it ends"));
+          const taken = (room as { moveToNote?: string | null }).moveToNote ?? null;
+          if (room.inMeeting) badges.push(el("span", { class: "badge meeting", title: "A meeting is running in this room now" }, free.length ? `In a meeting: fix after it ends, or move it to ${free[0]!.name}` : taken ? `In a meeting: fix after it ends; ${taken}` : "In a meeting: fix after it ends"));
           const body: Node[] = [];
           if (room.issues.length)
             body.push(el("ul", { class: "issues" }, ...room.issues.map((i) => el("li", {}, i.issue, ...(i.since ? [el("span", { class: "since" }, ` since ${i.since}`)] : [])))));

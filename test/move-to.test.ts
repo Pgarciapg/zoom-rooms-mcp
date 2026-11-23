@@ -186,3 +186,78 @@ test("a free room whose name is only control characters is shown by its id", asy
   assert.deepEqual(a.rooms[0]!.moveTo, [{ id: "r2", name: "r2" }]);
   assert.match(a.summary, /or move it to r2, free now/);
 });
+
+// Two meetings displaced at once (2026-11-23, 1:30 relay). Each in-meeting problem room was pointed at the same first
+// free room, which only moved the collision. Now each gets a different free room, worst room first, and a room left
+// without one says the free rooms nearby are already suggested for the rooms above it.
+/** A fake whose room details come from the list row, so several problem rooms can be read. */
+const many = (rooms: Record<string, unknown>[]): ZoomRoomsClient => ({
+  listRooms: async () => ({ rooms }),
+  getRoom: async (id: string) => {
+    const r = rooms.find((x) => x.id === id)!;
+    return { ...r, issues: [{ issue: "Camera disconnected", severity: "critical", since: String(r.since ?? "2026-11-23T16:00:00Z") }] };
+  },
+  getRoomDevices: async () => ({ devices: [] }),
+});
+
+test("two meetings in the same place are sent to different free rooms", async () => {
+  const a = await roomsNeedingAttention(many([
+    { ...row("m1", "Board Room", "In Meeting", "Critical"), since: "2026-11-23T15:00:00Z" },
+    { ...row("m2", "Huddle 4", "In Meeting", "Critical"), since: "2026-11-23T16:00:00Z" },
+    row("f1", "Room 401", "Available", "Healthy"),
+    row("f2", "Room 402", "Available", "Healthy"),
+  ]));
+  assert.deepEqual(a.rooms.map((r) => r.name), ["Board Room", "Huddle 4"]);
+  assert.equal(a.rooms[0]!.moveTo[0]!.name, "Room 401");
+  assert.equal(a.rooms[1]!.moveTo[0]!.name, "Room 402");
+  // A room's list never offers a room already given to another meeting.
+  assert.deepEqual(a.rooms[0]!.moveTo.map((r) => r.name), ["Room 401"]);
+  assert.deepEqual(a.rooms[1]!.moveTo.map((r) => r.name), ["Room 402"]);
+  assert.match(a.summary, /Board Room \(L4\)?.*or move it to Room 401,/);
+  assert.match(a.summary, /Huddle 4.*or move it to Room 402,/);
+});
+
+test("with one free room, the second meeting is told it is already suggested, not pointed at it silently", async () => {
+  const a = await roomsNeedingAttention(many([
+    { ...row("m1", "Board Room", "In Meeting", "Critical"), since: "2026-11-23T15:00:00Z" },
+    { ...row("m2", "Huddle 4", "In Meeting", "Critical"), since: "2026-11-23T16:00:00Z" },
+    row("f1", "Room 401", "Available", "Healthy"),
+  ]));
+  assert.equal(a.rooms[0]!.moveTo[0]!.name, "Room 401");
+  assert.deepEqual(a.rooms[1]!.moveTo, []);
+  assert.equal(a.rooms[1]!.moveToNote, "the only free room in the same Zoom location, Room 401, is suggested for Board Room");
+  assert.match(a.summary, /Huddle 4[^\n]*in a meeting right now \(fix after it ends; the only free room in the same Zoom location, Room 401, is suggested for Board Room\)\./);
+  assert.equal(a.rooms[0]!.moveToNote, null);
+});
+
+test("the worst room gets first pick, and rooms in other places do not compete", async () => {
+  const a = await roomsNeedingAttention(many([
+    { ...row("w1", "Huddle 4", "In Meeting", "Warning") },
+    { ...row("c1", "Board Room", "In Meeting", "Critical") },
+    { ...row("x1", "Room 500", "In Meeting", "Critical", "L5") },
+    row("f1", "Room 401", "Available", "Healthy"),
+    row("f5", "Room 501", "Available", "Healthy", "L5"),
+  ]));
+  const by = Object.fromEntries(a.rooms.map((r) => [r.name, r]));
+  assert.equal(by["Board Room"]!.moveTo[0]!.name, "Room 401");
+  assert.equal(by["Room 500"]!.moveTo[0]!.name, "Room 501");
+  assert.deepEqual(by["Huddle 4"]!.moveTo, []);
+  assert.match(by["Huddle 4"]!.moveToNote!, /Room 401, is suggested for Board Room$/);
+});
+
+test("several free rooms all taken are listed by name, and a room not in a meeting takes none", async () => {
+  const a = await roomsNeedingAttention(many([
+    { ...row("m1", "A Room", "In Meeting", "Critical"), since: "2026-11-23T14:00:00Z" },
+    { ...row("m2", "B Room", "In Meeting", "Critical"), since: "2026-11-23T15:00:00Z" },
+    { ...row("m3", "C Room", "In Meeting", "Critical"), since: "2026-11-23T16:00:00Z" },
+    { ...row("i1", "Idle Room", "Available", "Critical"), since: "2026-11-23T13:00:00Z" },
+    row("f1", "Room 401", "Available", "Healthy"),
+    row("f2", "Room 402", "Available", "Healthy"),
+  ]));
+  const by = Object.fromEntries(a.rooms.map((r) => [r.name, r]));
+  assert.deepEqual(by["Idle Room"]!.moveTo, []);
+  assert.equal(by["Idle Room"]!.moveToNote, null);
+  assert.equal(by["A Room"]!.moveTo[0]!.name, "Room 401");
+  assert.equal(by["B Room"]!.moveTo[0]!.name, "Room 402");
+  assert.equal(by["C Room"]!.moveToNote, "the 2 free rooms in the same Zoom location (Room 401, Room 402) are suggested for A Room and B Room");
+});
