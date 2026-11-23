@@ -24,7 +24,9 @@ export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<
     })
     .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
     // "Room 2" before "Room 10".
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    // Two free rooms here with the same name: add Zoom's room id, so a meeting is not moved into the wrong one.
+    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id).slice(0, 24)})` } : r));
 };
 
 /** "A", "A and B", "A, B and C". */
@@ -40,12 +42,20 @@ export const allocateMoveTo = (
   wanted: { name: string; candidates: { id: string; name: string }[] }[],
 ): { moveTo: { id: string; name: string }[]; moveToNote: string | null }[] => {
   const givenTo = new Map<string, string>(); // free room id -> the meeting room it was suggested for
+  // Two problem rooms with the same name ("Lobby" in two buildings) are told apart by their number in the list, which
+  // is the same order as this one.
+  const nameCount = new Map<string, number>();
+  for (const w of wanted) nameCount.set(cleanName(w.name).toLowerCase(), (nameCount.get(cleanName(w.name).toLowerCase()) ?? 0) + 1);
+  const label = (name: string, i: number) => {
+    const n = cleanName(name) || "another room";
+    return (nameCount.get(cleanName(name).toLowerCase()) ?? 0) > 1 ? `${n} (number ${i + 1} in this list)` : n;
+  };
   const picks = wanted.map(({ name, candidates }, i) => {
     // Among the rooms still open, take the one fewest later meetings could use, so a later meeting with a single option
     // is not stranded (A can use R1 or R2, B only R1: A gets R2). Ties keep name order.
     const later = (id: string) => wanted.slice(i + 1).filter((w) => w.candidates.some((c) => c.id === id)).length;
     const pick = candidates.filter((c) => !givenTo.has(c.id)).reduce<{ id: string; name: string } | null>((best, c) => (!best || later(c.id) < later(best.id) ? c : best), null);
-    if (pick) givenTo.set(pick.id, cleanName(name) || "another room");
+    if (pick) givenTo.set(pick.id, label(name, i));
     return pick;
   });
   // Backups (after a meeting's own pick) are spare rooms nobody was given, and each spare backs up one meeting only, worst

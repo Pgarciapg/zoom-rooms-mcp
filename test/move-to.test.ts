@@ -263,7 +263,7 @@ test("several free rooms all taken are listed by name, and a room not in a meeti
 });
 
 // From the Sonnet review of the allocation (2026-11-23).
-import { allocateMoveTo } from "../src/move-to.ts";
+import { allocateMoveTo, freeRoomsIn } from "../src/move-to.ts";
 
 test("a room with two options leaves the only option of a later room alone", () => {
   const r1 = { id: "R1", name: "Room 1" }, r2 = { id: "R2", name: "Room 2" };
@@ -312,4 +312,19 @@ test("review: one meeting's list never repeats a room", () => {
   const r = (n: number) => ({ id: `R${n}`, name: `Room ${n}` });
   const one = allocateMoveTo([{ name: "A", candidates: [r(1), r(2), r(2), r(3)] }]);
   assert.deepEqual(one[0]!.moveTo.map((m) => m.id), ["R1", "R2", "R3"]);
+});
+
+// Kept Low from the move-apart review (2026-11-23, 3:00 relay): same-named rooms read ambiguously.
+test("two problem rooms with the same name are told apart by their number in the list", () => {
+  const r1 = { id: "R1", name: "Room 1" };
+  const out = allocateMoveTo([{ name: "Lobby", candidates: [r1] }, { name: "lobby", candidates: [r1] }, { name: "Board", candidates: [r1] }]);
+  assert.equal(out[1]!.moveToNote, "the only free room in the same Zoom location, Room 1, is suggested for Lobby (number 1 in this list)");
+  const plain = allocateMoveTo([{ name: "Lobby", candidates: [r1] }, { name: "Board", candidates: [r1] }]);
+  assert.equal(plain[1]!.moveToNote, "the only free room in the same Zoom location, Room 1, is suggested for Lobby");
+});
+
+test("two free rooms with the same name carry Zoom's room id", () => {
+  const row = (id: string, name: string) => ({ id, name, location_id: "L1", status: "Available", health: "Healthy" });
+  const free = freeRoomsIn([row("aaa", "Huddle"), row("bbb", "huddle"), row("ccc", "Room 5")], new Set(["x"]), new Set(["L1"]));
+  assert.deepEqual(free.map((f) => f.name).sort(), ["Huddle (Zoom room aaa)", "huddle (Zoom room bbb)", "Room 5"].sort());
 });
