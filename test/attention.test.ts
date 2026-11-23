@@ -15,13 +15,14 @@ const withRooms = (rooms: any[], overrides: Partial<ZoomRoomsClient> = {}): Zoom
 });
 
 test("demo: 3 of 32 rooms, critical first, each with issues, failing devices and a next step", async () => {
-  const a = await roomsNeedingAttention(demo());
+  // A fixed clock, so the age is pinned (the demo's sample times are from March 2026).
+  const a = await roomsNeedingAttention(demo(), undefined, Date.parse("2026-03-30T09:20:00Z"));
   assert.equal(a.total, 32);
   assert.equal(a.needAttention, 3);
   assert.deepEqual(a.counts, { critical: 1, warning: 2 });
   assert.deepEqual(a.rooms.map((r) => [r.level, r.name]), [["critical", "Conference 4B"], ["warning", "Room 212"], ["warning", "Boardroom East"]]);
   assert.deepEqual(a.rooms[0]!.devices, ["Logitech Rally (Camera): Disconnected"]);
-  assert.match(a.rooms[0]!.next, /^The room computer is offline \(last online 2026-03-28T09:20:00Z(, about [0-9,]+ days ago)?\).*Then: Reseat the camera/);
+  assert.match(a.rooms[0]!.next, /^The room computer is offline \(last online 2026-03-28T09:20:00Z, about 2 days ago\).*Then: Reseat the camera/);
   assert.match(a.rooms[2]!.next, /microphone's network or PoE/);
   assert.equal(a.allClear, false);
   assert.match(a.summary, /^3 of 32 rooms need attention: 1 critical, 2 warning\./);
