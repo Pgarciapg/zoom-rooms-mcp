@@ -307,3 +307,9 @@ test("backup rooms are never shared between two meetings", () => {
   assert.deepEqual(tight.map((o) => o.moveTo.length), [2, 1]);
   assert.equal(tight[1]!.moveToNote, null);
 });
+
+test("review: one meeting's list never repeats a room", () => {
+  const r = (n: number) => ({ id: `R${n}`, name: `Room ${n}` });
+  const one = allocateMoveTo([{ name: "A", candidates: [r(1), r(2), r(2), r(3)] }]);
+  assert.deepEqual(one[0]!.moveTo.map((m) => m.id), ["R1", "R2", "R3"]);
+});

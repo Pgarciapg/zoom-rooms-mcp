@@ -54,8 +54,13 @@ export const allocateMoveTo = (
   return wanted.map(({ candidates }, i) => {
     const pick = picks[i];
     if (pick) {
-      const backups = candidates.filter((c) => c.id !== pick.id && !givenTo.has(c.id) && !backedUp.has(c.id)).slice(0, MOVE_TO_LIMIT - 1);
-      backups.forEach((c) => backedUp.add(c.id));
+      const backups: { id: string; name: string }[] = [];
+      for (const c of candidates) {
+        if (backups.length >= MOVE_TO_LIMIT - 1) break;
+        if (c.id === pick.id || givenTo.has(c.id) || backedUp.has(c.id)) continue;
+        backedUp.add(c.id);
+        backups.push(c);
+      }
       return { moveTo: [pick, ...backups], moveToNote: null };
     }
     if (!candidates.length) return { moveTo: [], moveToNote: null };
