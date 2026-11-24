@@ -144,3 +144,35 @@ export class PlaceNamer {
     return `Place names: ${parts.join(" ")} Grouping by place is not affected.`;
   }
 }
+
+/**
+ * A place someone named (2026-11-24): every location in the tree whose own name, or whose place name ("Building 1, 3rd
+ * Floor"), matches, with the room location codes at or under it. A match inside another match is the same place. More
+ * than one place with rooms is ambiguous (the caller asks which). `problem` says when the list could not be fully read.
+ */
+export const findPlace = async (
+  client: ZoomRoomsClient,
+  want: (text: string) => boolean,
+  roomCodes: string[],
+): Promise<{ places: { label: string; codes: string[] }[]; read: boolean; problem: string | null }> => {
+  const { tree, problem } = await readTree(client);
+  if (!tree.size) return { places: [], read: false, problem };
+  const ancestors = (id: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    let at = id;
+    while (at && tree.has(at) && !seen.has(at) && out.length < MAX_DEPTH) {
+      seen.add(at);
+      out.push(at);
+      at = tree.get(at)!.parent;
+    }
+    return out;
+  };
+  const matched = [...tree.keys()].filter((id) => want(tree.get(id)!.name) || want(placeName(tree, id).name ?? ""));
+  // A match inside another match (a floor named like its building) is the outer place.
+  const outer = matched.filter((id) => !ancestors(id).slice(1).some((a) => matched.includes(a)));
+  const places = outer
+    .map((id) => ({ label: placeName(tree, id).name ?? tree.get(id)!.name ?? id, codes: roomCodes.filter((c) => ancestors(c).includes(id)) }))
+    .filter((p) => p.codes.length > 0);
+  return { places, read: true, problem };
+};

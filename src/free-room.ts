@@ -6,6 +6,7 @@
 // later, so the answer says to check the room's calendar before taking it.
 import type { ZoomRoomsClient } from "./client.ts";
 import { cleanName, FIT_LOOKUP_LIMIT, freeRoomsIn, lookUpFits, type Fit } from "./move-to.ts";
+import { findPlace } from "./locations.ts";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? "" : String(v));
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -26,6 +27,8 @@ export interface FreeRoomAnswer {
   attendees: number | null;
   /** The room named as "near", when one was found. */
   near: { id: string; name: string; free?: boolean } | null;
+  /** The place named as "near" (a floor or a building), when no room had that name (2026-11-24). */
+  place?: { name: string; locations: string[] };
   rooms: FreeRoom[];
   /** Free rooms whose seats were not looked up (past the lookup limit). */
   notLookedUp: number;
@@ -52,6 +55,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
 
   const idOf = (r: Record<string, unknown>) => str(r.id) || str(r.room_id);
   let near: { id: string; name: string; location: string } | null = null;
+  let place: { name: string; codes: Set<string> } | null = null;
   let nearFree = false;
   if (opts.near) {
     // Cleaned the same way stored names are (control characters, length), and runs of spaces count as one.
@@ -63,10 +67,26 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     const matches = byId.length && byName.some((r) => !byId.some((b) => idOf(b) === idOf(r))) ? [...byId, ...byName] : byId.length ? byId : byName;
     // Rooms with no Zoom id are each their own room (never merged under an empty id).
     const distinct = [...new Map(matches.map((r, i) => [idOf(r) || `\u0000no-id-${i}`, r])).values()];
-    if (!distinct.length) {
+    // No room by that name or id: a place (a floor, a building, a campus) by its Zoom location name, with everything
+    // under it. Several places by that name: ask which. A location list that could not be fully read is said.
+    let placeRead = false;
+    // Whether the room list itself was only partly read (a places problem is said separately).
+    const roomListPartial = couldNotCheck.length > 0;
+    if (!distinct.length && client.listLocations) {
+      const codes = [...new Set(rooms.map((r) => str(r.location_id)).filter(Boolean))];
+      const found = await findPlace(client, (t) => squash(t) === want, codes);
+      placeRead = found.read;
+      if (found.problem) couldNotCheck.push(`Places: ${found.problem}, so a place by that name may be missed or incomplete.`);
+      if (found.places.length > 1) {
+        const labels = found.places.map((p) => p.label).sort();
+        return { ...base, summary: `"${cleanName(opts.near)}" matches more than one place (${labels.join("; ")}). Say which one, like "${labels[0]}".`, couldNotCheck };
+      }
+      if (found.places.length === 1) place = { name: found.places[0]!.label, codes: new Set(found.places[0]!.codes) };
+    }
+    if (!distinct.length && !place) {
       // Only part of the list was read: the room may be on a page that was not, so absence is not stated as fact.
-      const partial = couldNotCheck.length > 0;
-      return { ...base, summary: `No room called "${cleanName(opts.near)}" is in ${partial ? "the part of Zoom's room list that could be read" : "Zoom's room list"}, so no nearby free room can be named. Use a name or id from list_zoom_rooms.`, couldNotCheck };
+      const partial = roomListPartial;
+      return { ...base, summary: `No room${placeRead ? " or place" : ""} called "${cleanName(opts.near)}" is in ${partial ? "the part of Zoom's room list that could be read" : "Zoom's room list"}, so no nearby free room can be named. Use a name or id from list_zoom_rooms.`, couldNotCheck };
     }
     // Nothing tells them apart (no Zoom id on any of them): say so, never pick one.
     if (distinct.length > 1 && distinct.every((r) => !idOf(r)))
@@ -76,17 +96,21 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     const pickNote = noIds ? ` ${noIds === 1 ? "The one with no Zoom id can't be picked by id" : `The ${noIds} with no Zoom id can't be picked by id`}; to ask about ${noIds === 1 ? "it" : "them"}, rename ${noIds === 1 ? "it" : "them"} in Zoom first.` : "";
     if (distinct.length > 1)
       return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) ? `"${cleanName(str(r.name))}"` : "no name"} (Zoom room ${cleanName(idOf(r)) || "with no id"})`).join(", ")}). Say which one by its id.${pickNote}`, couldNotCheck };
+    // A place: free rooms in it (below). A room: free rooms in its location.
+    if (!place) {
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
     nearFree = /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health));
     // A room with no Zoom location has no "same location": say so rather than guess a floor.
     if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is free and healthy right now, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
+    }
   }
 
-  const locations = near ? new Set([near.location]) : new Set(rooms.map((r) => str(r.location_id)));
+  const locations = place ? place.codes : near ? new Set([near.location]) : new Set(rooms.map((r) => str(r.location_id)));
   const free = freeRoomsIn(rooms, new Set(near ? [near.id] : []), locations);
-  const where = near ? ` in the same Zoom location as ${near.name}` : "";
+  const where = place ? ` in ${place.name}` : near ? ` in the same Zoom location as ${near.name}` : "";
+  const placeOut = place ? { place: { name: place.name, locations: [...place.codes] } } : {};
   const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;
   // With a meeting size, the named room's own seats are looked up too, so "free" never reads as "fits".
   let itself = "";
@@ -98,7 +122,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   }
   if (!free.length) {
     const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
-    return { ...base, near: nearOut, summary, couldNotCheck };
+    return { ...base, near: nearOut, ...placeOut, summary, couldNotCheck };
   }
 
   const looked = free.slice(0, FIT_LOOKUP_LIMIT);
@@ -142,5 +166,5 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   head = `${itself}${head}`;
   const lines = [head, "", ...rooms_.map((r) => `- ${r.name}${r.name.includes("(Zoom room ") ? "" : ` (Zoom room ${cleanName(r.id)})`}: ${r.text}`), "", CALENDAR];
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
-  return { ...base, near: nearOut, rooms: rooms_, notLookedUp: rest.length, couldNotCheck, summary: lines.join("\n") };
+  return { ...base, near: nearOut, ...placeOut, rooms: rooms_, notLookedUp: rest.length, couldNotCheck, summary: lines.join("\n") };
 };

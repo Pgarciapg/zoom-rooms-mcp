@@ -195,3 +195,48 @@ test("a free named room with no Zoom id: its seats are never looked up with an e
   assert.ok(!reads.includes(""), `read ids: ${JSON.stringify(reads)}`);
   assert.match(a.summary, /^Atrium itself is free and healthy right now \(its seats can't be looked up: it has no Zoom id\)\. /);
 });
+
+// "near" can name a place, not only a room (2026-11-24, 12:00 relay): people think "near the 4th floor of Building 1".
+import { DemoZoomRoomsClient } from "../src/client.ts";
+
+test("near a place: a floor by its full name, a whole building, or a floor name two buildings share (asks which)", async () => {
+  const demo = new DemoZoomRoomsClient();
+  const floor = await findFreeRoom(demo, { near: "building 1, 3rd floor" });
+  assert.deepEqual(floor.rooms.map((r) => r.name).sort(), ["Room 301", "Room 303", "Room 304"]);
+  assert.match(floor.summary, /in Building 1, 3rd Floor/);
+  const building = await findFreeRoom(demo, { near: "Building 2" });
+  assert.ok(building.rooms.length > 0);
+  assert.ok(building.rooms.every((r) => /Lab|Bldg 2|Training/.test(r.name)), building.rooms.map((r) => r.name).join(", "));
+  assert.match(building.summary, /in Main Campus, Building 2/);
+  const shared = await findFreeRoom(demo, { near: "1st Floor" });
+  assert.deepEqual(shared.rooms, []);
+  assert.match(shared.summary, /^"1st Floor" matches more than one place \(Building 1, 1st Floor; Building 2, 1st Floor; Building 3, 1st Floor\)\. Say which one, like "Building 1, 1st Floor"\./);
+  assert.ok(!building.rooms.some((r) => /^Room [1-5]0/.test(r.name)), "no Building 1 rooms in Building 2");
+});
+
+// From the Sonnet review (2026-11-24, 12:00 relay).
+test("review: a campus or building includes every floor under it, by the location tree", async () => {
+  const demo = new DemoZoomRoomsClient();
+  const campus = await findFreeRoom(demo, { near: "Main Campus" });
+  const names = campus.rooms.map((r) => r.name);
+  assert.ok(names.some((n) => /^Room 30/.test(n)) && names.some((n) => /^Lab/.test(n)), names.join(", "));
+  const building1 = await findFreeRoom(demo, { near: "Building 1" });
+  assert.ok(building1.rooms.length > 3);
+  assert.equal(building1.place?.locations.every((c) => c.startsWith("bldg-1-")), true);
+});
+
+test("review: a location list that could not be read is said, never a silent 'no place'", async () => {
+  const rooms = [room("h", "Huddle", "L4")];
+  const broken = { ...fake(rooms, { h: 4 }), listLocations: async () => { throw new Error("timeout"); } };
+  const a = await findFreeRoom(broken, { near: "Floor 4" });
+  assert.ok(a.couldNotCheck.some((c) => /^Places: Zoom's location list could not be read \(timeout\)/.test(c)), a.couldNotCheck.join(" | "));
+  assert.match(a.summary, /No room called "Floor 4" is in Zoom's room list/);
+});
+
+test("a room name still wins over a place name; no room and no place still says so", async () => {
+  const demo = new DemoZoomRoomsClient();
+  const room = await findFreeRoom(demo, { near: "Room 302" });
+  assert.equal(room.near?.name, "Room 302");
+  const nothing = await findFreeRoom(demo, { near: "Moon Base" });
+  assert.match(nothing.summary, /No room or place called "Moon Base"/);
+});

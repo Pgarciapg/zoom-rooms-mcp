@@ -177,10 +177,10 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     "find_free_room",
     {
       title: "Find a free Zoom Room",
-      description: `Rooms that are free (not in a meeting) and healthy right now in Zoom's room list, each with its seats from Zoom. Pass near (a room's name or id) for rooms in the same Zoom location only, and attendees (the meeting size) to put rooms that fit first, smallest first; without seats in Zoom a room says "capacity not compared", never a guessed fit. It only reads and books nothing; Zoom's room list does not show later bookings, so it says to check the room's calendar${note}.`,
+      description: `Rooms that are free (not in a meeting) and healthy right now in Zoom's room list, each with its seats from Zoom. Pass near (a room's name or id, or a place such as a floor or building by its Zoom location name) for rooms in the same Zoom location only, and attendees (the meeting size) to put rooms that fit first, smallest first; without seats in Zoom a room says "capacity not compared", never a guessed fit. It only reads and books nothing; Zoom's room list does not show later bookings, so it says to check the room's calendar${note}.`,
       inputSchema: {
         attendees: z.number().int().min(1).max(MAX_ATTENDEES).optional().describe("How many people need the room, if known. Used only to compare with each room's seats; never guessed."),
-        near: z.string().min(1).max(200).optional().describe("A room's name or id; only free rooms in the same Zoom location are listed"),
+        near: z.string().min(1).max(200).optional().describe("A room's name or id (free rooms in the same Zoom location), or a place by its Zoom location name, like \"Building 1, 3rd Floor\" or \"Building 1\""),
       },
       annotations: READ_ONLY,
     },
