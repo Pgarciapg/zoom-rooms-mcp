@@ -98,3 +98,35 @@ test("through the server, read-only", async () => {
   const r = (await client.callTool({ name: "find_free_room", arguments: { attendees: 8, near: "Board Room" } })) as any;
   assert.match(r.content[0].text, /smallest that fits is Studio/);
 });
+
+// From the Sonnet review (2026-11-24).
+test("review: past the lookup cap, smallest and largest are said to be of the rooms looked up", async () => {
+  const rooms = Array.from({ length: 12 }, (_, i) => room(`r${i + 1}`, `Room ${String(i + 1).padStart(2, "0")}`));
+  const seats: Record<string, number> = Object.fromEntries(rooms.map((r) => [r.id, 4]));
+  const none = await findFreeRoom(fake(rooms, { ...seats, r11: 20, r12: 8 }), { attendees: 6 });
+  assert.match(none.summary, /the largest of the 10 looked up \(the first by name\) is Room 01 \(seats 4\)\. 2 more free rooms were not looked up\./);
+  const some = await findFreeRoom(fake(rooms, { ...seats, r1: 10, r12: 6 }), { attendees: 6 });
+  assert.match(some.summary, /the smallest that fits of the 10 looked up \(the first by name\) is Room 01/);
+  const plain = await findFreeRoom(fake(rooms, seats));
+  assert.match(plain.summary, /^12 rooms are free and healthy right now\. Seats were looked up for the first 10 by name\./);
+});
+
+test("review: a failed seat read is not blamed on Zoom, and nothing known is not a 'none fits'", async () => {
+  const err = new Error("Zoom API 500");
+  const a = await findFreeRoom(fake(ROOMS, { h: 4, m: err, s: err }), { attendees: 8, near: "b" });
+  assert.match(a.summary, /2 rooms' seats could not be read, so they were not compared\./);
+  assert.ok(a.couldNotCheck.includes("Seats for Studio: its Zoom room profile could not be read."), a.couldNotCheck.join(" | "));
+  const b = await findFreeRoom(fake(ROOMS, { h: err, m: err, s: err }), { attendees: 3, near: "b" });
+  assert.match(b.summary, /^No free room in the same Zoom location as Board Room could be compared with 3 people: none of the 3 rooms looked up has readable seats\./);
+});
+
+test("review: a near room not found on a partial list is not called missing", async () => {
+  const a = await findFreeRoom(fake(ROOMS, {}, [], true), { near: "Nope" });
+  assert.match(a.summary, /No room called "Nope" is in the part of Zoom's room list that could be read/);
+});
+
+test("review: a same-named free room carries its id once", async () => {
+  const a = await findFreeRoom(fake([room("a", "Lobby"), room("c", "Lobby")], { a: 5 }));
+  assert.ok(a.summary.includes("- Lobby (Zoom room a): seats 5"), a.summary);
+  assert.ok(!a.summary.includes("(Zoom room a) (Zoom room a)"), a.summary);
+});
