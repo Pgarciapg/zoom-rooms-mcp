@@ -306,7 +306,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
           // Two problem rooms with one name ("Lobby, Lobby"), or one named like this room, carry Zoom's room id.
           .map((r, _i, all) => {
             const same = all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 || r.name.toLowerCase() === cleanName(room.name).toLowerCase();
-            return same && r.id ? `${r.name} (Zoom room ${cleanName(r.id)})` : r.name;
+            return !same ? r.name : r.id ? `${r.name} (Zoom room ${cleanName(r.id)})` : `${r.name} (no Zoom id)`;
           });
         const shared = rivals.length
           ? `${rivals.length === 1 ? `Another problem room here, ${rivals[0]}, is` : `${rivals.length} other problem rooms here (${rivals.slice(0, MOVE_TO_LIMIT).join(", ")}${rivals.length > MOVE_TO_LIMIT ? ", ..." : ""}) are`} also in a meeting; get_rooms_needing_attention gives each meeting a different free room.`

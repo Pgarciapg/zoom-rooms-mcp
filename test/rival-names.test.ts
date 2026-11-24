@@ -30,3 +30,18 @@ test("different names read as before, and one room listed twice is one rival", a
   const d = await run([me, spare, row("a1", "Atrium", "In Meeting", "Warning"), row("a1", "Atrium", "In Meeting", "Warning")]);
   assert.match(d.summary, /Another problem room here, Atrium, is also in a meeting/);
 });
+
+// From the Sonnet review (2026-11-24).
+test("review: the attention list labels same-named problem rooms with the same Zoom ids", async () => {
+  const { roomsNeedingAttention } = await import("../src/attention.ts");
+  const a = await roomsNeedingAttention(fake([row("a1", "Atrium", "Offline", "Critical"), row("a2", "Atrium", "Offline", "Critical"), row("b1", "Board", "Offline", "Critical")]), undefined, NOW);
+  assert.match(a.summary, /\] Atrium \(Zoom room a1\): Offline/);
+  assert.match(a.summary, /\] Atrium \(Zoom room a2\): Offline/);
+  assert.match(a.summary, /\] Board: Offline/);
+});
+
+test("review: same-named rivals with no id say so", async () => {
+  const noId = (name: string) => ({ name, status: "In Meeting", health: "Warning", location_id: "L1" });
+  const d = await run([me, spare, noId("Atrium"), noId("Atrium")]);
+  assert.match(d.summary, /Atrium \(no Zoom id\), Atrium \(no Zoom id\)/);
+});

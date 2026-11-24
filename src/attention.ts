@@ -5,7 +5,7 @@
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
-import { allocateMoveTo, besideRoom, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
+import { allocateMoveTo, besideRoom, cleanName, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
 
 export type Level = "critical" | "warning";
@@ -172,7 +172,10 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
     lines.push(`${problems.length} of ${rooms.length} rooms need attention: ${parts}.`);
     detailed.forEach((room, i) => {
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${besideRoom(room.moveToSize.capacity, { name: room.name, seats: room.seats })}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
+      // Two problem rooms with one name also carry Zoom's room id, the label diagnose_room uses for them.
+      const twin = detailed.filter((o) => o.name.toLowerCase() === room.name.toLowerCase()).length > 1;
+      const place = [room.where, twin ? `Zoom room ${cleanName(room.id)}` : null].filter(Boolean).join(", ");
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${place ? ` (${place})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${besideRoom(room.moveToSize.capacity, { name: room.name, seats: room.seats })}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since}${issue.age ? `, ${issue.age} ago` : ""})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);
