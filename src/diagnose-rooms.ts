@@ -9,6 +9,7 @@
 // are left out of the device groups: they are most likely a side effect. Groups come worst first, each with one check,
 // then a short per-room list. Read-only; it never reports all clear while any room could not be read, and it never says
 // "no shared cause" without saying which rooms it did not get to.
+import { cleanName } from "./move-to.ts";
 import { levelOf } from "./attention.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
@@ -247,8 +248,10 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const placeNote = places.note();
   // A name two problem rooms share carries Zoom's room id, the same label the other tools use for them.
   const shared = (name: string) => problems.filter(({ r }) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
-  const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${id})` : name);
-  const notDiagnosed = problems.slice(limit).map(({ r }) => labelOf(str(r.name) || str(r.id), str(r.id)));
+  const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${cleanName(id)})` : name);
+  // One label per room, from its row in the room list (the detail's name can differ), looked up by id everywhere.
+  const labels = new Map(problems.map(({ r }) => [str(r.id), labelOf(str(r.name) || str(r.id), str(r.id))]));
+  const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(str(r.id))!);
   const patterns = findPatterns(diagnoses);
 
   const rows: RoomRow[] = diagnoses.map((d, i) => {
@@ -257,7 +260,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     const level: FindingLevel = d.findings.some((f) => f.level === "critical") ? "critical" : "warning";
     return { id: d.room.id, name: d.room.name, level, findings: d.findings.length, top: d.findings[0]?.subject ?? null, couldNotCheck: d.couldNotCheck.length };
   });
-  for (const d of diagnoses) if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${d.room ? labelOf(d.room.name, d.room.id) : "A room"}: ${c}`));
+  for (const d of diagnoses) if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${d.room ? labels.get(d.room.id) ?? d.room.name : "A room"}: ${c}`));
 
   // Rooms the patterns did not see: past the limit, or not read at all.
   const unread = rows.filter((r) => r.level === "could_not_check").length;

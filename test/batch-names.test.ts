@@ -31,3 +31,12 @@ test("different names read as before", async () => {
   const d = await diagnoseRooms(client([row("a", "Alpha"), row("b", "Beta"), row("c", "Gamma")], ["b"]), NOW, 1);
   assert.deepEqual(d.notDiagnosed, ["Beta", "Gamma"]);
 });
+
+// From the Sonnet review (2026-11-24).
+test("review: the label comes from the room list, even when the detail gives another name", async () => {
+  const rows = [row("l1", "Lobby"), row("l2", "Lobby")];
+  const c: ZoomRoomsClient = { ...client(rows, ["l1", "l2"]), getRoom: async (id) => ({ id, name: id === "l1" ? "Lobby 1" : "Lobby", issues: [{ issue: "Display disconnected", severity: "warning" }] }) };
+  const d = await diagnoseRooms(c, NOW);
+  assert.ok(d.couldNotCheck.some((x) => x.startsWith("Lobby (Zoom room l1): ")), d.couldNotCheck.join(" | "));
+  assert.ok(d.couldNotCheck.some((x) => x.startsWith("Lobby (Zoom room l2): ")), d.couldNotCheck.join(" | "));
+});
