@@ -6,6 +6,7 @@ import { attentionCard } from "./card-model.ts";
 import { diagnoseRoom, diagnosisText } from "./diagnose.ts";
 import { MAX_ATTENDEES } from "./move-to.ts";
 import { diagnoseRooms } from "./diagnose-rooms.ts";
+import { findFreeRoom } from "./free-room.ts";
 import { CARD_HTML } from "./generated/card.ts";
 import { EarlierDemoZoomRoomsClient, type ZoomRoomsClient } from "./client.ts";
 import { compare, defaultSnapshotPath, FileSnapshotStore, MemorySnapshotStore, nextSnapshot, readAccount, type Snapshot, type SnapshotStore } from "./changes.ts";
@@ -59,7 +60,7 @@ const guard =
 /** what_changed writes only its own snapshot file on this computer; it never changes anything in Zoom. */
 export const SAVES_LOCALLY = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
 
-export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagnose_rooms", "diagnose_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
+export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagnose_rooms", "diagnose_room", "find_free_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
 
 export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now }: ServerOptions): McpServer => {
   let store: SnapshotStore | null = snapshots ?? null;
@@ -166,6 +167,27 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       try {
         const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true, attendees });
         return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "find_free_room",
+    {
+      title: "Find a free Zoom Room",
+      description: `Rooms that are free (not in a meeting) and healthy right now in Zoom's room list, each with its seats from Zoom. Pass near (a room's name or id) for rooms in the same Zoom location only, and attendees (the meeting size) to put rooms that fit first, smallest first; without seats in Zoom a room says "capacity not compared", never a guessed fit. It only reads and books nothing; Zoom's room list does not show later bookings, so it says to check the room's calendar${note}.`,
+      inputSchema: {
+        attendees: z.number().int().min(1).max(MAX_ATTENDEES).optional().describe("How many people need the room, if known. Used only to compare with each room's seats; never guessed."),
+        near: z.string().min(1).max(200).optional().describe("A room's name or id; only free rooms in the same Zoom location are listed"),
+      },
+      annotations: READ_ONLY,
+    },
+    async ({ attendees, near }: { attendees?: number; near?: string }) => {
+      try {
+        const result = await findFreeRoom(client, { attendees, near });
+        return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
       }
