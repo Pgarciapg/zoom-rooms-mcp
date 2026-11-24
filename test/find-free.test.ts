@@ -172,3 +172,26 @@ test("a typed room name with a tab, extra spaces or past 60 characters still mat
   assert.match((await findFreeRoom(fake(rooms), { near: "board\troom" })).summary, /same Zoom location as Board +Room/);
   assert.match((await findFreeRoom(fake(rooms), { near: long })).summary, /same Zoom location as The Very Long/);
 });
+
+// Rooms with no Zoom id (2026-11-24, 12:00 relay). Two same-named rooms with no id were merged into one and one was
+// picked silently; nothing could tell them apart, so it must say so rather than pick.
+test("two same-named rooms with no Zoom id: never one picked silently; says neither has an id", async () => {
+  const noId = (name: string, location_id: string, status = "Available") => ({ name, status, health: "Healthy", location_id });
+  const rooms = [noId("Atrium", "L4", "In Meeting"), noId("Atrium", "L9", "In Meeting"), room("h", "Huddle", "L4"), room("o", "Other Floor", "L9")];
+  const a = await findFreeRoom(fake(rooms, { h: 4, o: 30 }), { near: "Atrium" });
+  assert.deepEqual(a.rooms, []);
+  assert.match(a.summary, /^2 rooms are called "Atrium" and none of them has a Zoom id, so I can't tell which one you mean\. Rename one in Zoom, or ask without a room to see free rooms anywhere\./);
+  // One named room with no id, and one with an id: the id is how to pick.
+  const mixed = await findFreeRoom(fake([noId("Atrium", "L4", "In Meeting"), room("a2", "Atrium", "L9", "In Meeting"), room("o", "Other Floor", "L9")], { o: 30 }), { near: "Atrium" });
+  assert.match(mixed.summary, /^2 rooms match "Atrium" by name or Zoom id \("Atrium" \(Zoom room with no id\), "Atrium" \(Zoom room a2\)\)\. Say which one by its id\. The one with no Zoom id can't be picked by id; to ask about it, rename it in Zoom first\./);
+  // Picking the one with an id works.
+  const picked = await findFreeRoom(fake([noId("Atrium", "L4", "In Meeting"), room("a2", "Atrium", "L9", "In Meeting"), room("o", "Other Floor", "L9")], { o: 30 }), { near: "a2" });
+  assert.deepEqual(picked.rooms.map((r) => r.name), ["Other Floor"]);
+});
+
+test("a free named room with no Zoom id: its seats are never looked up with an empty id", async () => {
+  const reads: string[] = [];
+  const a = await findFreeRoom(fake([{ name: "Atrium", status: "Available", health: "Healthy", location_id: "L4" }, room("h", "Huddle", "L4")], { h: 4 }, reads), { near: "Atrium", attendees: 6 });
+  assert.ok(!reads.includes(""), `read ids: ${JSON.stringify(reads)}`);
+  assert.match(a.summary, /^Atrium itself is free and healthy right now \(its seats can't be looked up: it has no Zoom id\)\. /);
+});

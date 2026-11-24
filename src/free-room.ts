@@ -61,14 +61,21 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     const byName = rooms.filter((r) => squash(str(r.name)) === want);
     // One room by its id and another by its name: never pick one silently, ask which (by id).
     const matches = byId.length && byName.some((r) => !byId.some((b) => idOf(b) === idOf(r))) ? [...byId, ...byName] : byId.length ? byId : byName;
-    const distinct = [...new Map(matches.map((r) => [idOf(r), r])).values()];
+    // Rooms with no Zoom id are each their own room (never merged under an empty id).
+    const distinct = [...new Map(matches.map((r, i) => [idOf(r) || `\u0000no-id-${i}`, r])).values()];
     if (!distinct.length) {
       // Only part of the list was read: the room may be on a page that was not, so absence is not stated as fact.
       const partial = couldNotCheck.length > 0;
       return { ...base, summary: `No room called "${cleanName(opts.near)}" is in ${partial ? "the part of Zoom's room list that could be read" : "Zoom's room list"}, so no nearby free room can be named. Use a name or id from list_zoom_rooms.`, couldNotCheck };
     }
+    // Nothing tells them apart (no Zoom id on any of them): say so, never pick one.
+    if (distinct.length > 1 && distinct.every((r) => !idOf(r)))
+      return { ...base, summary: `${distinct.length} rooms are called "${cleanName(opts.near)}" and none of them has a Zoom id, so I can't tell which one you mean. Rename one in Zoom, or ask without a room to see free rooms anywhere.`, couldNotCheck };
+    // A room with no Zoom id can't be picked by id: say so, so the question is never a dead end.
+    const noIds = distinct.filter((r) => !idOf(r)).length;
+    const pickNote = noIds ? ` ${noIds === 1 ? "The one with no Zoom id can't be picked by id" : `The ${noIds} with no Zoom id can't be picked by id`}; to ask about ${noIds === 1 ? "it" : "them"}, rename ${noIds === 1 ? "it" : "them"} in Zoom first.` : "";
     if (distinct.length > 1)
-      return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) ? `"${cleanName(str(r.name))}"` : "no name"} (Zoom room ${cleanName(idOf(r)) || "with no id"})`).join(", ")}). Say which one by its id.`, couldNotCheck };
+      return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) ? `"${cleanName(str(r.name))}"` : "no name"} (Zoom room ${cleanName(idOf(r)) || "with no id"})`).join(", ")}). Say which one by its id.${pickNote}`, couldNotCheck };
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
@@ -84,8 +91,10 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   // With a meeting size, the named room's own seats are looked up too, so "free" never reads as "fits".
   let itself = "";
   if (near && nearFree) {
-    const own = attendees != null ? (await lookUpFits(client, [near.id], attendees))[0]! : null;
-    itself = `${near.name} itself is free and healthy right now${own ? ` (${own.text})` : ""}. `;
+    // A room with no Zoom id has no room profile to read: its seats are said as unknown, never looked up with an empty id.
+    const own = attendees != null && near.id ? (await lookUpFits(client, [near.id], attendees))[0]! : null;
+    const unknown = attendees != null && !near.id ? " (its seats can't be looked up: it has no Zoom id)" : "";
+    itself = `${near.name} itself is free and healthy right now${own ? ` (${own.text})` : unknown}. `;
   }
   if (!free.length) {
     const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
