@@ -6,7 +6,7 @@
 // clear while something could not be read.
 import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
-import { cleanName, freeRoomsIn, MOVE_TO_LIMIT } from "./move-to.ts";
+import { cleanName, FIT_LOOKUP_LIMIT, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { ago } from "./ago.ts";
 
@@ -58,6 +58,12 @@ export interface RoomDiagnosis {
    * why the list is empty or may be incomplete. Never affects allClear.
    */
   moveTo: { rooms: { id: string; name: string }[]; more: number; note: string | null } | null;
+  /**
+   * The seats of each room in `moveTo.rooms` (same order), from Zoom's room profile, and whether it fits `attendees`
+   * (the meeting size the caller gave, or null). With a meeting size, rooms that fit are named first. Null when no free
+   * room was named. Never affects allClear.
+   */
+  roomSizes: { attendees: number | null; rooms: RoomFit[]; note: string | null } | null;
 }
 
 export { MOVE_TO_LIMIT } from "./move-to.ts";
@@ -100,7 +106,7 @@ const GENERIC_DEVICE_CHECK = "Check the device's power and cable, then look at i
 const GENERIC_ISSUE_CHECK = "Open the room in the Zoom admin portal and read its full alert.";
 
 /** Pass `listed` (the room's row from listRooms) when you already have it, so the room list is not read again. */
-export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown, places = new PlaceNamer(client), opts: { moveTo?: boolean } = {}): Promise<RoomDiagnosis> => {
+export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown, places = new PlaceNamer(client), opts: { moveTo?: boolean; attendees?: number } = {}): Promise<RoomDiagnosis> => {
   const couldNotCheck: string[] = [];
   let detail: any = null;
   let deviceData: unknown[] | null = null;
@@ -138,7 +144,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
 
   if (!detail && !listed) {
     const summary = `Could not check room ${roomId}: ${couldNotCheck[0]?.replace(/^[^:]+: /, "") ?? "it did not answer"}. This is not an all-clear.`;
-    return { summary, view: "room-diagnosis", room: null, findings: [], devices: [], couldNotCheck, allClear: false, placeNote: null, moveTo: null };
+    return { summary, view: "room-diagnosis", room: null, findings: [], devices: [], couldNotCheck, allClear: false, placeNote: null, moveTo: null, roomSizes: null };
   }
 
   const loc = detail?.location;
@@ -264,6 +270,10 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   // Where a meeting can go. Only rooms with the same Zoom location code (never a guess across floors), up, free and
   // healthy by Zoom's own list. A list that could not be read says so; it never reads as "none free".
   let moveTo: RoomDiagnosis["moveTo"] = null;
+  let roomSizes: RoomDiagnosis["roomSizes"] = null;
+  const attendees = readAttendees(opts.attendees);
+  // With a meeting size: true when none of the free rooms whose size was read fits it (set with the rooms below).
+  let noneFits: { checked: number; largest: RoomFit | null } | null = null;
   if (opts.moveTo && findings.length > 0) {
     try {
       // A room list that already failed here is not read again.
@@ -291,7 +301,23 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
         const shared = rivals.length
           ? `${rivals.length === 1 ? `Another problem room here, ${rivals[0]}, is` : `${rivals.length} other problem rooms here (${rivals.slice(0, MOVE_TO_LIMIT).join(", ")}${rivals.length > MOVE_TO_LIMIT ? ", ..." : ""}) are`} also in a meeting; get_rooms_needing_attention gives each meeting a different free room.`
           : null;
-        moveTo = { rooms: free.slice(0, MOVE_TO_LIMIT), more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
+        // Room sizes. Without a meeting size, only the named rooms are read. With one, up to FIT_LOOKUP_LIMIT free rooms
+        // are read and the ones that fit are named first (then unknown, then too small; name order within each).
+        let shown = free.slice(0, MOVE_TO_LIMIT);
+        let sizes: RoomFit[] = [];
+        let sizeNote: string | null = null;
+        if (attendees != null && free.length) {
+          const looked = free.slice(0, FIT_LOOKUP_LIMIT);
+          const fits = await lookUpFits(client, looked.map((r) => r.id), attendees);
+          const ordered = looked.map((r, i) => ({ r, f: fits[i]! })).sort((a, b) => FIT_ORDER[a.f.fit] - FIT_ORDER[b.f.fit]);
+          shown = ordered.slice(0, MOVE_TO_LIMIT).map((o) => o.r);
+          sizes = ordered.slice(0, MOVE_TO_LIMIT).map((o) => o.f);
+          if (free.length > FIT_LOOKUP_LIMIT) sizeNote = `Room sizes were read for ${FIT_LOOKUP_LIMIT} of the ${free.length} free rooms (first by name); the rest were not compared.`;
+          if (ordered.every((o) => o.f.fit === "too_small"))
+            noneFits = { checked: looked.length, largest: ordered.map((o) => o.f).reduce<RoomFit | null>((m, f) => (!m || (f.capacity ?? 0) > (m.capacity ?? 0) ? f : m), null) };
+        } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null);
+        if (shown.length) roomSizes = { attendees, rooms: sizes, note: sizeNote };
+        moveTo = { rooms: shown, more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
       }
     } catch (error) {
       moveTo = { rooms: [], more: 0, note: `Could not read the room list, so no free room nearby could be looked for (${msg(error)}).` };
@@ -303,7 +329,15 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     ? (room.inMeeting ? "" : ` Free now in the same Zoom location: ${freeNames}.`) + (moveTo.note ? ` ${moveTo.note}` : "")
     : moveTo.note && /^(Could not|Zoom gives no|This room's location)/.test(moveTo.note) ? " Could not look for a free room nearby." : ` No other room in the same Zoom location is free and healthy right now.${moveTo.note ? ` ${moveTo.note}` : ""}`;
   const head = `${room.name}${room.where ? ` (${room.where})` : ""}`;
-  const meeting = room.inMeeting ? ` A meeting is running in it right now: fix after it ends${freeNames ? `, or move it to ${moveTo!.rooms[0]!.name}, free now in the same Zoom location` : ""}.` : "";
+  // The first suggestion's size, only when there is something to say (a known capacity, or a meeting size to compare).
+  const firstSize = roomSizes?.rooms[0];
+  const sizeTag = firstSize && (firstSize.capacity != null || attendees != null) ? ` (${firstSize.text})` : "";
+  const largest = noneFits?.largest;
+  const moveHint = !freeNames ? ""
+    : noneFits && attendees != null
+      ? `; none of the ${noneFits.checked === 1 ? "free room" : `${noneFits.checked} free rooms`} in the same Zoom location whose size was read seats ${attendees}${largest ? ` (largest: ${moveTo!.rooms.find((r) => r.id === largest.id)?.name ?? "one"}, ${largest.capacity} seats)` : ""}`
+      : `, or move it to ${moveTo!.rooms[0]!.name}${sizeTag}, free now in the same Zoom location`;
+  const meeting = room.inMeeting ? ` A meeting is running in it right now: fix after it ends${moveHint}.` : "";
   let summary: string;
   if (allClear) summary = `${head}: all clear. Health is ${room.health}, the room computer is ${room.status}, and ${devices.length === 1 ? "its 1 device is online" : `all ${devices.length} devices are online`}.${meeting}`;
   else if (findings.length === 0) summary = `${head}: no problems found in what could be read, but not everything could be checked (${couldNotCheck.length}). This is not an all-clear.${meeting}`;
@@ -314,7 +348,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     const top = findings[0]!;
     summary = `${head}: ${counts}. Start with ${top.subject}: ${top.check}${meeting}${lookLine}${couldNotCheck.length ? ` Not everything could be checked (${couldNotCheck.length}).` : ""}`;
   }
-  return { summary, view: "room-diagnosis", room, findings, devices, couldNotCheck, allClear, placeNote, moveTo };
+  return { summary, view: "room-diagnosis", room, findings, devices, couldNotCheck, allClear, placeNote, moveTo, roomSizes };
 };
 
 /** The diagnosis as plain text: summary, findings worst first, every device, and what could not be checked. */
@@ -329,6 +363,11 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
     // "Same Zoom location", not the floor: a location code can be a whole building.
     if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map((r) => (r.name.endsWith(`(Zoom room ${r.id})`) ? r.name : `${r.name} (${r.id})`)).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
     else lines.push("", m.note && /^(Could not|Zoom gives no|This room's location)/.test(m.note) ? m.note : `No other room in the same Zoom location is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
+    const s = d.roomSizes;
+    if (s?.rooms.length) {
+      const nameOf = (id: string) => m.rooms.find((r) => r.id === id)?.name ?? id;
+      lines.push(`Room sizes${s.attendees != null ? ` for a meeting of ${s.attendees}` : ""}: ${s.rooms.map((f) => `${nameOf(f.id)}: ${f.text}`).join("; ")}.${s.note ? ` ${s.note}` : ""}`);
+    }
   }
   if (d.devices.length) lines.push("", "Devices:", ...d.devices.map((x) => `- ${x.name} (${x.type}): ${x.status}${x.firmware ? `, firmware ${x.firmware}` : ""}`));
   if (d.couldNotCheck.length) lines.push("", "Could not check:", ...d.couldNotCheck.map((c) => `- ${c}`));

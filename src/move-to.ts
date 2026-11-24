@@ -82,3 +82,59 @@ export const allocateMoveTo = (
     return { moveTo: [], moveToNote: note };
   });
 };
+
+// Room size on the suggestion (2026-11-24). Zoom gives a room's seats on its room profile (Get Zoom Room profile,
+// `basic.capacity`, 1 to 500). It gives no simple count of who is in a meeting, so the meeting size is only what the
+// person says. Whenever either number is missing or unreadable, the answer is "capacity not compared", never a guessed fit.
+
+export type Fit = "fits" | "too_small" | "not_compared";
+export interface RoomFit {
+  id: string;
+  /** Seats, from Zoom's room profile; null when Zoom gives none or it could not be read. */
+  capacity: number | null;
+  fit: Fit;
+  /** Plain words, e.g. "seats 12, fits 10 people" or "capacity not compared: Zoom gives no capacity for it". */
+  text: string;
+}
+
+/** Free rooms whose size is looked up when a meeting size is given (each is one Zoom call). */
+export const FIT_LOOKUP_LIMIT = 10;
+/** The largest meeting size accepted (Zoom room capacity tops out at 500). */
+export const MAX_ATTENDEES = 1000;
+
+/** Seats from a Zoom room profile (`basic.capacity`): a whole number from 1 to 500, else null. */
+export const readCapacity = (profile: unknown): number | null => {
+  const raw = isObj(profile) && isObj(profile.basic) ? profile.basic.capacity : undefined;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*\d{1,4}\s*$/.test(raw) ? Number(raw) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 500 ? n : null;
+};
+
+const people = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
+
+/** Compare a room's seats with the meeting size. Missing or unreadable on either side is "not compared". */
+export const fitFor = (id: string, capacity: number | null, attendees: number | null | undefined, unreadable = false): RoomFit => {
+  if (capacity == null)
+    return { id, capacity: null, fit: "not_compared", text: `capacity not compared: ${unreadable ? "its capacity could not be read" : "Zoom gives no capacity for it"}` };
+  if (attendees == null) return { id, capacity, fit: "not_compared", text: `seats ${capacity}; capacity not compared: no meeting size given` };
+  return capacity >= attendees
+    ? { id, capacity, fit: "fits", text: `seats ${capacity}, fits ${people(attendees)}` }
+    : { id, capacity, fit: "too_small", text: `seats ${capacity}, too small for ${people(attendees)}` };
+};
+
+/** A meeting size the caller gave: a whole number from 1 to MAX_ATTENDEES, else null (not compared). */
+export const readAttendees = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_ATTENDEES ? v : null);
+
+/** Each room's seats from its Zoom profile (one read per room, in parallel). A failed read is "could not be read", never a fit. */
+export const lookUpFits = (client: { getRoom(id: string): Promise<unknown> }, ids: string[], attendees?: number | null): Promise<RoomFit[]> =>
+  Promise.all(
+    ids.map(async (id) => {
+      try {
+        return fitFor(id, readCapacity(await client.getRoom(id)), attendees);
+      } catch {
+        return fitFor(id, null, attendees, true);
+      }
+    }),
+  );
+
+/** Order for a known meeting size: rooms that fit first, then not compared, then too small (name order kept within each). */
+export const FIT_ORDER: Record<Fit, number> = { fits: 0, not_compared: 1, too_small: 2 };

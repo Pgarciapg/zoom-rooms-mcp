@@ -1,5 +1,5 @@
 import { getAccessToken, type ZoomCredentials } from "./auth.ts";
-import { EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_LOCATIONS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
+import { DEMO_SEATS, EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_LOCATIONS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
 
 /** The read-only Zoom Rooms calls the MCP tools need. */
 export interface ZoomRoomsClient {
@@ -122,6 +122,7 @@ export class DemoZoomRoomsClient implements ZoomRoomsClient {
     return (
       MOCK_ROOM_DETAILS[room.id] ?? {
         ...room,
+        ...(DEMO_SEATS[room.id] ? { basic: { name: room.name, capacity: DEMO_SEATS[room.id] } } : {}),
         issues: [],
       }
     );

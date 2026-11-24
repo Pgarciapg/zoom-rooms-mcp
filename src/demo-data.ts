@@ -41,6 +41,9 @@ export const MOCK_ROOMS = {
   ],
 };
 
+/** Seats on some free demo rooms' profiles (Zoom's basic.capacity). Café Meeting has none, to show "not compared". */
+export const DEMO_SEATS: Record<string, number> = { "rm-004": 4, "rm-016": 6, "rm-017": 12, "rm-025": 6, "rm-029": 4 };
+
 export const MOCK_ROOM_DETAILS: Record<string, unknown> = {
   "rm-001": {
     id: "rm-001", name: "Conference 4B", room_id: "conf-4b", status: "Offline",

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { roomsNeedingAttention } from "./attention.ts";
 import { attentionCard } from "./card-model.ts";
 import { diagnoseRoom, diagnosisText } from "./diagnose.ts";
+import { MAX_ATTENDEES } from "./move-to.ts";
 import { diagnoseRooms } from "./diagnose-rooms.ts";
 import { CARD_HTML } from "./generated/card.ts";
 import { EarlierDemoZoomRoomsClient, type ZoomRoomsClient } from "./client.ts";
@@ -154,13 +155,16 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     "diagnose_room",
     {
       title: "Diagnose one Zoom Room",
-      description: `Why one Zoom Room is unhappy and what to check first: the room computer, each open issue and each device that is not online, with an issue and the failing device it describes joined into one finding, worst first, each with one check. Says whether a meeting is running in it now and, for a room with a problem, names up to three other rooms in the same Zoom location that are healthy and free right now. Anything it could not read is listed apart, and it never reports all clear while something could not be read${note}.`,
-      inputSchema: { roomId },
+      description: `Why one Zoom Room is unhappy and what to check first: the room computer, each open issue and each device that is not online, with an issue and the failing device it describes joined into one finding, worst first, each with one check. Says whether a meeting is running in it now and, for a room with a problem, names up to three other rooms in the same Zoom location that are healthy and free right now, each with its seats when Zoom gives them. Pass attendees (the meeting size) to see whether each room fits it; rooms that fit are named first. Without a meeting size, or when Zoom gives no seats for a room, it says "capacity not compared" and never guesses a fit. Anything it could not read is listed apart, and it never reports all clear while something could not be read${note}.`,
+      inputSchema: {
+        roomId,
+        attendees: z.number().int().min(1).max(MAX_ATTENDEES).optional().describe("How many people are in the meeting, if known. Used only to say whether each free room's seats fit; never guessed."),
+      },
       annotations: READ_ONLY,
     },
-    async ({ roomId }: { roomId: string }) => {
+    async ({ roomId, attendees }: { roomId: string; attendees?: number }) => {
       try {
-        const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true });
+        const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true, attendees });
         return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
