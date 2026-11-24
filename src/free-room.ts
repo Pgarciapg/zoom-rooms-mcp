@@ -66,7 +66,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
       return { ...base, summary: `No room called "${cleanName(opts.near)}" is in ${partial ? "the part of Zoom's room list that could be read" : "Zoom's room list"}, so no nearby free room can be named. Use a name or id from list_zoom_rooms.`, couldNotCheck };
     }
     if (distinct.length > 1)
-      return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) || "no name"}, Zoom room ${cleanName(idOf(r))}`).join("; ")}). Say which one by its id.`, couldNotCheck };
+      return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) ? `"${cleanName(str(r.name))}"` : "no name"} (Zoom room ${cleanName(idOf(r)) || "with no id"})`).join(", ")}). Say which one by its id.`, couldNotCheck };
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
