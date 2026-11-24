@@ -56,7 +56,9 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   if (opts.near) {
     const want = opts.near.trim().toLowerCase();
     const byId = rooms.filter((r) => idOf(r).toLowerCase() === want);
-    const matches = byId.length ? byId : rooms.filter((r) => cleanName(str(r.name)).toLowerCase() === want);
+    const byName = rooms.filter((r) => cleanName(str(r.name)).toLowerCase() === want);
+    // One room by its id and another by its name: never pick one silently, ask which (by id).
+    const matches = byId.length && byName.some((r) => !byId.some((b) => idOf(b) === idOf(r))) ? [...byId, ...byName] : byId.length ? byId : byName;
     const distinct = [...new Map(matches.map((r) => [idOf(r), r])).values()];
     if (!distinct.length) {
       // Only part of the list was read: the room may be on a page that was not, so absence is not stated as fact.
@@ -64,7 +66,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
       return { ...base, summary: `No room called "${cleanName(opts.near)}" is in ${partial ? "the part of Zoom's room list that could be read" : "Zoom's room list"}, so no nearby free room can be named. Use a name or id from list_zoom_rooms.`, couldNotCheck };
     }
     if (distinct.length > 1)
-      return { ...base, summary: `${distinct.length} rooms are called "${cleanName(opts.near)}" (Zoom room ${distinct.map((r) => cleanName(idOf(r))).join(", ")}). Say which one by its id.`, couldNotCheck };
+      return { ...base, summary: `${distinct.length} rooms match "${cleanName(opts.near)}" by name or Zoom id (${distinct.map((r) => `${cleanName(str(r.name)) || "no name"}, Zoom room ${cleanName(idOf(r))}`).join("; ")}). Say which one by its id.`, couldNotCheck };
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.

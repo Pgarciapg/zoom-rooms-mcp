@@ -60,7 +60,7 @@ test("a room it cannot find, or two with one name, is said plainly; a room with 
   assert.match(missing.summary, /No room called "Nope" is in Zoom's room list/);
   assert.deepEqual(missing.rooms, []);
   const twins = await findFreeRoom(fake([...ROOMS, room("b2", "Board Room", "L9")]), { near: "Board Room" });
-  assert.match(twins.summary, /2 rooms are called "Board Room" \(Zoom room b, b2\)\. Say which one by its id\./);
+  assert.match(twins.summary, /2 rooms match "Board Room" by name or Zoom id \(Board Room, Zoom room b; Board Room, Zoom room b2\)\. Say which one by its id\./);
   const noLoc = await findFreeRoom(fake([room("q", "Lonely", ""), room("h", "Huddle", "")]), { near: "Lonely" });
   assert.match(noLoc.summary, /has no Zoom location/);
   assert.deepEqual(noLoc.rooms, []);
@@ -154,4 +154,14 @@ test("review: with a meeting size, the named room's own seats are checked, and t
   const noLoc = await findFreeRoom(fake([room("q", "Lonely", "")]), { near: "Lonely" });
   assert.match(noLoc.summary, /^Lonely itself is free and healthy right now, but it has no Zoom location/);
   assert.equal(noLoc.near!.free, true);
+});
+
+test("a near that is one room's id and another room's name asks which, never picks silently", async () => {
+  const rooms = [room("x", "Alpha", "L4"), room("y", "x", "L9"), room("h", "Huddle", "L4")];
+  const a = await findFreeRoom(fake(rooms), { near: "x" });
+  assert.match(a.summary, /^2 rooms match "x" by name or Zoom id \(Alpha, Zoom room x; x, Zoom room y\)\. Say which one by its id\./);
+  assert.deepEqual(a.rooms, []);
+  // An id that is also the same room's name is one room.
+  const same = await findFreeRoom(fake([room("lobby", "Lobby", "L4"), room("h", "Huddle", "L4")]), { near: "lobby" });
+  assert.match(same.summary, /same Zoom location as Lobby/);
 });
