@@ -70,14 +70,19 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
     nearFree = /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health));
     // A room with no Zoom location has no "same location": say so rather than guess a floor.
-    if (!near.location) return { ...base, near: { id: near.id, name: near.name }, summary: `${near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
+    if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is free and healthy right now, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
   }
 
   const locations = near ? new Set([near.location]) : new Set(rooms.map((r) => str(r.location_id)));
   const free = freeRoomsIn(rooms, new Set(near ? [near.id] : []), locations);
   const where = near ? ` in the same Zoom location as ${near.name}` : "";
   const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;
-  const itself = near && nearFree ? `${near.name} itself is free and healthy right now. ` : "";
+  // With a meeting size, the named room's own seats are looked up too, so "free" never reads as "fits".
+  let itself = "";
+  if (near && nearFree) {
+    const own = attendees != null ? (await lookUpFits(client, [near.id], attendees))[0]! : null;
+    itself = `${near.name} itself is free and healthy right now${own ? ` (${own.text})` : ""}. `;
+  }
   if (!free.length) {
     const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
     return { ...base, near: nearOut, summary, couldNotCheck };
@@ -113,7 +118,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     else if (!sized.length) head = `No free room${where} could be compared with ${people(attendees)}: none of the ${plural(looked.length, "room", "rooms")} looked up has readable seats.`;
     else {
       const largest = sized.reduce<FreeRoom | null>((b, r) => (!b || r.seats! > b.seats! ? r : b), null);
-      head = `None of the free rooms${where} that were looked up seats ${people(attendees)}; the largest${ofLooked} is ${largest!.name} (seats ${largest!.seats}).`;
+      head = `None of the ${itself ? "other " : ""}free rooms${where} that were looked up seats ${people(attendees)}; the largest${ofLooked} is ${largest!.name} (seats ${largest!.seats}).`;
     }
     if (!ok.length && (noSeats || failed)) {
       const parts = [noSeats && `${plural(noSeats, "room has", "rooms have")} no seats in Zoom`, failed && `${plural(failed, "room's", "rooms'")} seats could not be read`].filter(Boolean).join(" and ");

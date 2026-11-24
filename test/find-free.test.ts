@@ -62,7 +62,7 @@ test("a room it cannot find, or two with one name, is said plainly; a room with 
   const twins = await findFreeRoom(fake([...ROOMS, room("b2", "Board Room", "L9")]), { near: "Board Room" });
   assert.match(twins.summary, /2 rooms are called "Board Room" \(Zoom room b, b2\)\. Say which one by its id\./);
   const noLoc = await findFreeRoom(fake([room("q", "Lonely", ""), room("h", "Huddle", "")]), { near: "Lonely" });
-  assert.match(noLoc.summary, /Lonely has no Zoom location/);
+  assert.match(noLoc.summary, /has no Zoom location/);
   assert.deepEqual(noLoc.rooms, []);
 });
 
@@ -142,4 +142,16 @@ test("the named room itself, when free, is said first and never listed as nearby
   const busy = await findFreeRoom(fake(ROOMS, SEATS), { near: "b" });
   assert.doesNotMatch(busy.summary, /itself is free/);
   assert.equal(busy.near!.free, false);
+});
+
+// From the Sonnet review (2026-11-24).
+test("review: with a meeting size, the named room's own seats are checked, and the rest are 'other' rooms", async () => {
+  const rooms = [room("b", "Board Room", "L4"), room("h", "Huddle", "L4")];
+  const a = await findFreeRoom(fake(rooms, { b: 14, h: 4 }), { attendees: 12, near: "Board Room" });
+  assert.match(a.summary, /^Board Room itself is free and healthy right now \(seats 14, fits 12 people\)\. None of the other free rooms in the same Zoom location as Board Room that were looked up seats 12 people; the largest is Huddle \(seats 4\)\./);
+  const small = await findFreeRoom(fake([room("b", "Board Room", "L4")], { b: 6 }), { attendees: 8, near: "b" });
+  assert.match(small.summary, /^Board Room itself is free and healthy right now \(seats 6, too small for 8 people\)\. No other room/);
+  const noLoc = await findFreeRoom(fake([room("q", "Lonely", "")]), { near: "Lonely" });
+  assert.match(noLoc.summary, /^Lonely itself is free and healthy right now, but it has no Zoom location/);
+  assert.equal(noLoc.near!.free, true);
 });
