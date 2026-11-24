@@ -300,7 +300,14 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
         const rivals = !room.inMeeting || !free.length ? [] : roomList.rooms
           .filter((r): r is Record<string, unknown> => isObj(r) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
           .filter((r) => mine.has(str(r.location_id)) && /^\s*in ?meeting\s*$/i.test(str(r.status)) && levelOf(r) !== null)
-          .map((r) => cleanName(str(r.name)) || cleanName(str(r.id) || str(r.room_id)) || "another room");
+          .map((r) => ({ id: str(r.id) || str(r.room_id), name: cleanName(str(r.name)) || cleanName(str(r.id) || str(r.room_id)) || "another room" }))
+          // The same room listed twice is one rival.
+          .filter((r, i, all) => !r.id || all.findIndex((o) => o.id === r.id) === i)
+          // Two problem rooms with one name ("Lobby, Lobby"), or one named like this room, carry Zoom's room id.
+          .map((r, _i, all) => {
+            const same = all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 || r.name.toLowerCase() === cleanName(room.name).toLowerCase();
+            return same && r.id ? `${r.name} (Zoom room ${cleanName(r.id)})` : r.name;
+          });
         const shared = rivals.length
           ? `${rivals.length === 1 ? `Another problem room here, ${rivals[0]}, is` : `${rivals.length} other problem rooms here (${rivals.slice(0, MOVE_TO_LIMIT).join(", ")}${rivals.length > MOVE_TO_LIMIT ? ", ..." : ""}) are`} also in a meeting; get_rooms_needing_attention gives each meeting a different free room.`
           : null;
