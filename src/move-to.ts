@@ -112,10 +112,17 @@ export const readCapacity = (profile: unknown): number | null => {
 const people = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
 
 /** Compare a room's seats with the meeting size. Missing or unreadable on either side is "not compared". */
-export const fitFor = (id: string, capacity: number | null, attendees: number | null | undefined, unreadable = false): RoomFit => {
+/**
+ * Without a meeting size, the problem room's own seats (when Zoom gives them) are the next best hint: a suggestion with
+ * fewer seats says so. It is a comparison of two rooms, never a fit claim.
+ */
+const besideHere = (capacity: number, ownSeats: number | null | undefined) =>
+  ownSeats == null ? "" : capacity < ownSeats ? `, fewer than the ${ownSeats} here` : `, this room seats ${ownSeats}`;
+
+export const fitFor = (id: string, capacity: number | null, attendees: number | null | undefined, unreadable = false, ownSeats: number | null = null): RoomFit => {
   if (capacity == null)
     return { id, capacity: null, fit: "not_compared", text: `capacity not compared: ${unreadable ? "its capacity could not be read" : "Zoom gives no capacity for it"}` };
-  if (attendees == null) return { id, capacity, fit: "not_compared", text: `seats ${capacity}; capacity not compared: no meeting size given` };
+  if (attendees == null) return { id, capacity, fit: "not_compared", text: `seats ${capacity}${besideHere(capacity, ownSeats)}; capacity not compared: no meeting size given` };
   return capacity >= attendees
     ? { id, capacity, fit: "fits", text: `seats ${capacity}, fits ${people(attendees)}` }
     : { id, capacity, fit: "too_small", text: `seats ${capacity}, too small for ${people(attendees)}` };
@@ -125,13 +132,13 @@ export const fitFor = (id: string, capacity: number | null, attendees: number | 
 export const readAttendees = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_ATTENDEES ? v : null);
 
 /** Each room's seats from its Zoom profile (one read per room, in parallel). A failed read is "could not be read", never a fit. */
-export const lookUpFits = (client: { getRoom(id: string): Promise<unknown> }, ids: string[], attendees?: number | null): Promise<RoomFit[]> =>
+export const lookUpFits = (client: { getRoom(id: string): Promise<unknown> }, ids: string[], attendees?: number | null, ownSeats: number | null = null): Promise<RoomFit[]> =>
   Promise.all(
     ids.map(async (id) => {
       try {
-        return fitFor(id, readCapacity(await client.getRoom(id)), attendees);
+        return fitFor(id, readCapacity(await client.getRoom(id)), attendees, false, ownSeats);
       } catch {
-        return fitFor(id, null, attendees, true);
+        return fitFor(id, null, attendees, true, ownSeats);
       }
     }),
   );

@@ -6,7 +6,7 @@
 // clear while something could not be read.
 import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
-import { cleanName, FIT_LOOKUP_LIMIT, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
+import { cleanName, FIT_LOOKUP_LIMIT, readCapacity, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { ago } from "./ago.ts";
 
@@ -40,6 +40,8 @@ export interface RoomFacts {
   health: string;
   inMeeting: boolean;
   lastOnline: string | null;
+  /** This room's seats from its Zoom profile (basic.capacity), or null. */
+  seats: number | null;
 }
 
 export interface RoomDiagnosis {
@@ -158,6 +160,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     health: str(detail?.health) || str(listed?.health),
     inMeeting: false,
     lastOnline: detail?.last_online ? str(detail.last_online) : null,
+    seats: readCapacity(detail),
   };
   room.inMeeting = /^\s*in ?meeting\s*$/i.test(room.status);
   // Where the room is. A building without a floor (or the reverse) is shown but never used to group rooms.
@@ -320,7 +323,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
               // The largest of the rooms looked up, named from that list (it may not be among the three shown).
               largest: ordered.reduce<{ name: string; capacity: number } | null>((m, o) => (o.f.capacity != null && (!m || o.f.capacity > m.capacity) ? { name: o.r.name, capacity: o.f.capacity } : m), null),
             };
-        } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null);
+        } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null, room.seats);
         if (shown.length) roomSizes = { attendees, rooms: sizes, note: sizeNote };
         moveTo = { rooms: shown, more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
       }

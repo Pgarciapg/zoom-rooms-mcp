@@ -5,7 +5,7 @@
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
-import { allocateMoveTo, freeRoomsIn, lookUpFits, type RoomFit } from "./move-to.ts";
+import { allocateMoveTo, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
 
 export type Level = "critical" | "warning";
@@ -39,6 +39,8 @@ export interface AttentionRoom {
   /** The seats of the first suggested room (moveTo[0]) from Zoom's room profile. This list has no meeting size, so the
    * fit is always "not_compared"; diagnose_room compares when given one. Null when nothing is suggested. */
   moveToSize: RoomFit | null;
+  /** This room's own seats from its Zoom profile (basic.capacity), or null. */
+  seats: number | null;
 }
 
 export interface Attention {
@@ -147,7 +149,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const candidates = inMeeting
         ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean)))
         : [];
-      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base, now), moveTo: candidates, moveToNote: null, moveToSize: null as RoomFit | null };
+      return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base, now), moveTo: candidates, moveToNote: null, moveToSize: null as RoomFit | null, seats: readCapacity(detail) };
     }),
   );
   // Within a level: offline first, then the oldest open issue first.
@@ -157,7 +159,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   allocateMoveTo(detailed.map((room) => ({ name: room.name, candidates: room.moveTo }))).forEach((m, i) => Object.assign(detailed[i]!, m));
   // The seats of each meeting's first suggestion (one profile read each; picks never repeat across meetings).
   const picked = detailed.filter((room) => room.moveTo.length);
-  (await lookUpFits(client, picked.map((room) => room.moveTo[0]!.id), null)).forEach((f, i) => (picked[i]!.moveToSize = f));
+  await Promise.all(picked.map(async (room) => (room.moveToSize = (await lookUpFits(client, [room.moveTo[0]!.id], null, room.seats))[0]!)));
 
   const counts = { critical: problems.filter((p) => p.level === "critical").length, warning: problems.filter((p) => p.level === "warning").length };
   const hidden = problems.length - detailed.length;
@@ -170,7 +172,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
     lines.push(`${problems.length} of ${rooms.length} rooms need attention: ${parts}.`);
     detailed.forEach((room, i) => {
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${room.seats == null ? "" : room.moveToSize.capacity < room.seats ? `, fewer than the ${room.seats} here` : `, this room seats ${room.seats}`}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since}${issue.age ? `, ${issue.age} ago` : ""})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);
