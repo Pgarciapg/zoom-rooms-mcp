@@ -5,7 +5,7 @@
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
-import { allocateMoveTo, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
+import { allocateMoveTo, besideRoom, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
 
 export type Level = "critical" | "warning";
@@ -159,7 +159,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   allocateMoveTo(detailed.map((room) => ({ name: room.name, candidates: room.moveTo }))).forEach((m, i) => Object.assign(detailed[i]!, m));
   // The seats of each meeting's first suggestion (one profile read each; picks never repeat across meetings).
   const picked = detailed.filter((room) => room.moveTo.length);
-  await Promise.all(picked.map(async (room) => (room.moveToSize = (await lookUpFits(client, [room.moveTo[0]!.id], null, room.seats))[0]!)));
+  (await lookUpFits(client, picked.map((room) => room.moveTo[0]!.id), null)).forEach((f, i) => (picked[i]!.moveToSize = f));
 
   const counts = { critical: problems.filter((p) => p.level === "critical").length, warning: problems.filter((p) => p.level === "warning").length };
   const hidden = problems.length - detailed.length;
@@ -172,7 +172,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
     lines.push(`${problems.length} of ${rooms.length} rooms need attention: ${parts}.`);
     detailed.forEach((room, i) => {
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${room.seats == null ? "" : room.moveToSize.capacity < room.seats ? `, fewer than the ${room.seats} here` : `, this room seats ${room.seats}`}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${room.where ? ` (${room.where})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${besideRoom(room.moveToSize.capacity, { name: room.name, seats: room.seats })}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since}${issue.age ? `, ${issue.age} ago` : ""})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);

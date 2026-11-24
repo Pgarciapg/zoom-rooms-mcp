@@ -6,7 +6,7 @@
 // clear while something could not be read.
 import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
-import { cleanName, FIT_LOOKUP_LIMIT, readCapacity, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
+import { besideRoom, cleanName, FIT_LOOKUP_LIMIT, readCapacity, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { ago } from "./ago.ts";
 
@@ -323,7 +323,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
               // The largest of the rooms looked up, named from that list (it may not be among the three shown).
               largest: ordered.reduce<{ name: string; capacity: number } | null>((m, o) => (o.f.capacity != null && (!m || o.f.capacity > m.capacity) ? { name: o.r.name, capacity: o.f.capacity } : m), null),
             };
-        } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null, room.seats);
+        } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null);
         if (shown.length) roomSizes = { attendees, rooms: sizes, note: sizeNote };
         moveTo = { rooms: shown, more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
       }
@@ -339,7 +339,11 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const head = `${room.name}${room.where ? ` (${room.where})` : ""}`;
   // The first suggestion's size, only when there is something to say (a known capacity, or a meeting size to compare).
   const firstSize = roomSizes?.rooms[0];
-  const sizeTag = firstSize && (firstSize.capacity != null || attendees != null) ? ` (${firstSize.text})` : "";
+  // Without a meeting size, the problem room's own seats are named beside the suggestion's: two rooms compared, not a fit.
+  const sizeText = firstSize && attendees == null && firstSize.capacity != null && room.seats != null
+    ? `seats ${firstSize.capacity}${besideRoom(firstSize.capacity, { name: room.name, seats: room.seats })}; capacity not compared: no meeting size given`
+    : firstSize?.text;
+  const sizeTag = firstSize && (firstSize.capacity != null || attendees != null) ? ` (${sizeText})` : "";
   const largest = noneFits?.largest;
   const moveHint = !freeNames ? ""
     : noneFits && attendees != null
@@ -374,7 +378,8 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
     const s = d.roomSizes;
     if (s?.rooms.length) {
       const nameOf = (id: string) => m.rooms.find((r) => r.id === id)?.name ?? id;
-      lines.push(`Room sizes${s.attendees != null ? ` for a meeting of ${s.attendees}` : ""}: ${s.rooms.map((f) => `${nameOf(f.id)}: ${f.text}`).join("; ")}.${s.note ? ` ${s.note}` : ""}`);
+      const own = s.attendees == null && d.room?.seats != null ? ` ${d.room.name} seats ${d.room.seats}.` : "";
+      lines.push(`Room sizes${s.attendees != null ? ` for a meeting of ${s.attendees}` : ""}: ${s.rooms.map((f) => `${nameOf(f.id)}: ${f.text}`).join("; ")}.${own}${s.note ? ` ${s.note}` : ""}`);
     }
   }
   if (d.devices.length) lines.push("", "Devices:", ...d.devices.map((x) => `- ${x.name} (${x.type}): ${x.status}${x.firmware ? `, firmware ${x.firmware}` : ""}`));
