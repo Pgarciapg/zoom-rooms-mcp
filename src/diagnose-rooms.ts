@@ -231,11 +231,8 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     return true;
   });
 
-  for (const r of rooms) {
-    const label = str(r.name) || str(r.id);
-    if (!levelOf(r) && !/^healthy$/i.test(str(r.health))) couldNotCheck.push(`${label}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
-    else if (!levelOf(r) && !UP_STATUS.test(str(r.status))) couldNotCheck.push(`${label}: status is "${str(r.status) || "not reported"}", so the room computer could not be classed as up.`);
-  }
+  // Rooms that are not problems but whose health or status could not be classed: they are named in the answer too.
+  const unclassed = rooms.filter((r) => !levelOf(r) && (!/^healthy$/i.test(str(r.health)) || !UP_STATUS.test(str(r.status))));
   // Offline first, then critical, then warning: the same order as get_rooms_needing_attention.
   const problems = rooms
     .map((r) => ({ r, level: levelOf(r) }))
@@ -246,11 +243,18 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const places = new PlaceNamer(client);
   const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r, places)));
   const placeNote = places.note();
-  // A name two problem rooms share carries Zoom's room id, the same label the other tools use for them.
-  const shared = (name: string) => problems.filter(({ r }) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
+  // A name two rooms named in this answer share (problem rooms and unclassed rooms) carries Zoom's room id, the same
+  // label the other tools use for problem rooms. Healthy rooms are never named, so a healthy twin adds nothing.
+  const named = [...problems.map(({ r }) => r), ...unclassed];
+  const shared = (name: string) => named.filter((r) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
   const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${cleanName(id)})` : name);
   // One label per room, from its row in the room list (the detail's name can differ), looked up by id everywhere.
   const labels = new Map(problems.map(({ r }) => [str(r.id), labelOf(str(r.name) || str(r.id), str(r.id))]));
+  for (const r of unclassed) {
+    const label = labelOf(str(r.name) || str(r.id), str(r.id));
+    if (!/^healthy$/i.test(str(r.health))) couldNotCheck.push(`${label}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
+    else couldNotCheck.push(`${label}: status is "${str(r.status) || "not reported"}", so the room computer could not be classed as up.`);
+  }
   const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(str(r.id))!);
   const patterns = findPatterns(diagnoses);
 
@@ -260,7 +264,10 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     const level: FindingLevel = d.findings.some((f) => f.level === "critical") ? "critical" : "warning";
     return { id: d.room.id, name: d.room.name, level, findings: d.findings.length, top: d.findings[0]?.subject ?? null, couldNotCheck: d.couldNotCheck.length };
   });
-  for (const d of diagnoses) if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${d.room ? labels.get(d.room.id) ?? d.room.name : "A room"}: ${c}`));
+  diagnoses.forEach((d, i) => {
+    const label = labels.get(d.room?.id ?? str(problems[i]!.r.id)) ?? d.room?.name ?? "A room";
+    if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${label}: ${c}`));
+  });
 
   // Rooms the patterns did not see: past the limit, or not read at all.
   const unread = rows.filter((r) => r.level === "could_not_check").length;
