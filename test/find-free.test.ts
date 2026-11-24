@@ -165,3 +165,10 @@ test("a near that is one room's id and another room's name asks which, never pic
   const same = await findFreeRoom(fake([room("lobby", "Lobby", "L4"), room("h", "Huddle", "L4")]), { near: "lobby" });
   assert.match(same.summary, /same Zoom location as Lobby/);
 });
+
+test("a typed room name with a tab, extra spaces or past 60 characters still matches", async () => {
+  const long = "The Very Long Executive Boardroom On The Fourth Floor East Wing Near Lifts";
+  const rooms = [room("b", "Board  Room", "L4"), room("l", long, "L5"), room("h", "Huddle", "L4"), room("k", "Kiosk", "L5")];
+  assert.match((await findFreeRoom(fake(rooms), { near: "board\troom" })).summary, /same Zoom location as Board +Room/);
+  assert.match((await findFreeRoom(fake(rooms), { near: long })).summary, /same Zoom location as The Very Long/);
+});

@@ -54,9 +54,11 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   let near: { id: string; name: string; location: string } | null = null;
   let nearFree = false;
   if (opts.near) {
-    const want = opts.near.trim().toLowerCase();
-    const byId = rooms.filter((r) => idOf(r).toLowerCase() === want);
-    const byName = rooms.filter((r) => cleanName(str(r.name)).toLowerCase() === want);
+    // Cleaned the same way stored names are (control characters, length), and runs of spaces count as one.
+    const squash = (t: string) => cleanName(t).replace(/\s+/g, " ").toLowerCase();
+    const want = squash(opts.near);
+    const byId = rooms.filter((r) => squash(idOf(r)) === want);
+    const byName = rooms.filter((r) => squash(str(r.name)) === want);
     // One room by its id and another by its name: never pick one silently, ask which (by id).
     const matches = byId.length && byName.some((r) => !byId.some((b) => idOf(b) === idOf(r))) ? [...byId, ...byName] : byId.length ? byId : byName;
     const distinct = [...new Map(matches.map((r) => [idOf(r), r])).values()];
