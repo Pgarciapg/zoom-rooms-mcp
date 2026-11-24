@@ -273,7 +273,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   let roomSizes: RoomDiagnosis["roomSizes"] = null;
   const attendees = readAttendees(opts.attendees);
   // With a meeting size: true when none of the free rooms whose size was read fits it (set with the rooms below).
-  let noneFits: { checked: number; largest: RoomFit | null } | null = null;
+  let noneFits: { checked: number; unread: number; largest: { name: string; capacity: number } | null } | null = null;
   if (opts.moveTo && findings.length > 0) {
     try {
       // A room list that already failed here is not read again.
@@ -312,9 +312,14 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
           const ordered = looked.map((r, i) => ({ r, f: fits[i]! })).sort((a, b) => FIT_ORDER[a.f.fit] - FIT_ORDER[b.f.fit]);
           shown = ordered.slice(0, MOVE_TO_LIMIT).map((o) => o.r);
           sizes = ordered.slice(0, MOVE_TO_LIMIT).map((o) => o.f);
-          if (free.length > FIT_LOOKUP_LIMIT) sizeNote = `Room sizes were read for ${FIT_LOOKUP_LIMIT} of the ${free.length} free rooms (first by name); the rest were not compared.`;
+          if (free.length > FIT_LOOKUP_LIMIT) sizeNote = `Room sizes were looked up for the first ${FIT_LOOKUP_LIMIT} of the ${free.length} free rooms by name; the rest were not compared.`;
           if (ordered.every((o) => o.f.fit === "too_small"))
-            noneFits = { checked: looked.length, largest: ordered.map((o) => o.f).reduce<RoomFit | null>((m, f) => (!m || (f.capacity ?? 0) > (m.capacity ?? 0) ? f : m), null) };
+            noneFits = {
+              checked: looked.length,
+              unread: free.length - looked.length,
+              // The largest of the rooms looked up, named from that list (it may not be among the three shown).
+              largest: ordered.reduce<{ name: string; capacity: number } | null>((m, o) => (o.f.capacity != null && (!m || o.f.capacity > m.capacity) ? { name: o.r.name, capacity: o.f.capacity } : m), null),
+            };
         } else if (shown.length) sizes = await lookUpFits(client, shown.map((r) => r.id), null);
         if (shown.length) roomSizes = { attendees, rooms: sizes, note: sizeNote };
         moveTo = { rooms: shown, more: Math.max(0, free.length - MOVE_TO_LIMIT), note: [partial, shared].filter(Boolean).join(" ") || null };
@@ -335,7 +340,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const largest = noneFits?.largest;
   const moveHint = !freeNames ? ""
     : noneFits && attendees != null
-      ? `; none of the ${noneFits.checked === 1 ? "free room" : `${noneFits.checked} free rooms`} in the same Zoom location whose size was read seats ${attendees}${largest ? ` (largest: ${moveTo!.rooms.find((r) => r.id === largest.id)?.name ?? "one"}, ${largest.capacity} seats)` : ""}`
+      ? `; none of the ${noneFits.checked === 1 ? "free room" : `${noneFits.checked} free rooms`} in the same Zoom location whose size was looked up seats ${attendees}${largest ? ` (largest: ${largest.name}, ${largest.capacity} seats)` : ""}${noneFits.unread ? `, and ${noneFits.unread} more free ${noneFits.unread === 1 ? "room was" : "rooms were"} not compared` : ""}`
       : `, or move it to ${moveTo!.rooms[0]!.name}${sizeTag}, free now in the same Zoom location`;
   const meeting = room.inMeeting ? ` A meeting is running in it right now: fix after it ends${moveHint}.` : "";
   let summary: string;

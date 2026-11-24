@@ -53,7 +53,7 @@ test("does not fit: a too-small room is never the suggested move, and rooms that
 test("does not fit anywhere: no move is suggested, and the largest room is named", async () => {
   const d = await run(fake([broken, free("r2", "Huddle A"), free("r3", "Huddle B")], { r2: 4, r3: 6 }), 10);
   assert.doesNotMatch(d.summary, /move it to/);
-  assert.match(d.summary, /fix after it ends; none of the 2 free rooms in the same Zoom location whose size was read seats 10 \(largest: Huddle B, 6 seats\)\./);
+  assert.match(d.summary, /fix after it ends; none of the 2 free rooms in the same Zoom location whose size was looked up seats 10 \(largest: Huddle B, 6 seats\)\./);
 });
 
 test("capacity unknown: Zoom gives no seats, so it is not compared and the room is still suggested", async () => {
@@ -99,7 +99,7 @@ test("with a meeting size, at most ten free rooms are read, and the note says th
   const rooms = Array.from({ length: 12 }, (_, i) => free(`f${i}`, `Room ${i + 1}`));
   const d = await run(fake([broken, ...rooms], {}, reads), 5);
   assert.equal(reads.length, 10);
-  assert.match(d.roomSizes?.note ?? "", /read for 10 of the 12 free rooms/);
+  assert.match(d.roomSizes?.note ?? "", /looked up for the first 10 of the 12 free rooms by name/);
 });
 
 test("without a meeting size only the named rooms are read", async () => {
@@ -133,4 +133,34 @@ test("demo campus: the 4th floor suggestion for a 10-person meeting is the room 
   const d = await diagnoseRoom(new DemoZoomRoomsClient(), "rm-001", NOW, undefined, undefined, { moveTo: true, attendees: 10 });
   assert.deepEqual(d.moveTo?.rooms.map((r) => r.name), ["Room 402", "Room 401"]);
   assert.deepEqual(d.roomSizes?.rooms.map((f) => f.text), ["seats 12, fits 10 people", "seats 6, too small for 10 people"]);
+});
+
+// From the Sonnet adversarial review (2026-11-24).
+test("review: none fits names the largest room even when it is not among the three shown", async () => {
+  const d = await run(fake([broken, free("a", "Room A"), free("b", "Room B"), free("c", "Room C"), free("d", "Room D")], { a: 2, b: 3, c: 4, d: 9 }), 10);
+  assert.match(d.summary, /none of the 4 free rooms .* seats 10 \(largest: Room D, 9 seats\)\./);
+});
+
+test("review: none fits says when more free rooms were not compared", async () => {
+  const rooms = Array.from({ length: 12 }, (_, i) => free(`f${i}`, `Room ${i + 1}`));
+  const d = await run(fake([broken, ...rooms], Object.fromEntries(rooms.map((r) => [r.id, 3]))), 10);
+  assert.match(d.summary, /none of the 10 free rooms .* seats 10 \(largest: Room 1, 3 seats\), and 2 more free rooms were not compared\./);
+});
+
+test("review: with one room of unknown size and the rest too small, the unknown one is suggested, never 'none fits'", async () => {
+  const d = await run(fake([broken, free("a", "A small"), free("b", "B unknown")], { a: 2 }), 10);
+  assert.match(d.summary, /move it to B unknown \(capacity not compared: Zoom gives no capacity for it\)/);
+  assert.doesNotMatch(d.summary, /none of/);
+});
+
+test("review: same-named free rooms keep their Zoom ids next to their sizes", async () => {
+  const d = await run(fake([broken, free("x1", "Huddle"), free("x2", "Huddle")], { x1: 4, x2: 12 }), 10);
+  assert.match(d.summary, /move it to Huddle \(Zoom room x2\) \(seats 12, fits 10 people\)/);
+});
+
+test("review: a failed seat read in the attention list is not compared and is not a could-not-check", async () => {
+  const a = await roomsNeedingAttention(fake([broken, free("r2", "Room 401")], { r2: new Error("Zoom API 500") }), undefined, NOW);
+  assert.equal(a.rooms[0]?.moveToSize?.text, "capacity not compared: its capacity could not be read");
+  assert.equal(a.couldNotCheck.length, 0);
+  assert.match(a.summary, /or move it to Room 401, free now/);
 });
