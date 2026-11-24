@@ -245,7 +245,10 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const places = new PlaceNamer(client);
   const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r, places)));
   const placeNote = places.note();
-  const notDiagnosed = problems.slice(limit).map(({ r }) => str(r.name) || str(r.id));
+  // A name two problem rooms share carries Zoom's room id, the same label the other tools use for them.
+  const shared = (name: string) => problems.filter(({ r }) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
+  const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${id})` : name);
+  const notDiagnosed = problems.slice(limit).map(({ r }) => labelOf(str(r.name) || str(r.id), str(r.id)));
   const patterns = findPatterns(diagnoses);
 
   const rows: RoomRow[] = diagnoses.map((d, i) => {
@@ -254,7 +257,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     const level: FindingLevel = d.findings.some((f) => f.level === "critical") ? "critical" : "warning";
     return { id: d.room.id, name: d.room.name, level, findings: d.findings.length, top: d.findings[0]?.subject ?? null, couldNotCheck: d.couldNotCheck.length };
   });
-  for (const d of diagnoses) if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${d.room?.name ?? "A room"}: ${c}`));
+  for (const d of diagnoses) if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${d.room ? labelOf(d.room.name, d.room.id) : "A room"}: ${c}`));
 
   // Rooms the patterns did not see: past the limit, or not read at all.
   const unread = rows.filter((r) => r.level === "could_not_check").length;
