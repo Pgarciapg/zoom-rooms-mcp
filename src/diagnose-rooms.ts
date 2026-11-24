@@ -245,17 +245,20 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const placeNote = places.note();
   // A name two rooms named in this answer share (problem rooms and unclassed rooms) carries Zoom's room id, the same
   // label the other tools use for problem rooms. Healthy rooms are never named, so a healthy twin adds nothing.
+  // get_rooms_needing_attention never names unclassed rooms, so there a problem room with only an unclassed twin
+  // stays bare; adding the id here is more information, never a different room.
   const named = [...problems.map(({ r }) => r), ...unclassed];
   const shared = (name: string) => named.filter((r) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
   const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${cleanName(id)})` : name);
   // One label per room, from its row in the room list (the detail's name can differ), looked up by id everywhere.
-  const labels = new Map(problems.map(({ r }) => [str(r.id), labelOf(str(r.name) || str(r.id), str(r.id))]));
+  const idOf = (r: any) => str(r.id) || str(r.room_id);
+  const labels = new Map(problems.map(({ r }) => [idOf(r), labelOf(str(r.name) || idOf(r), idOf(r))]));
   for (const r of unclassed) {
-    const label = labelOf(str(r.name) || str(r.id), str(r.id));
+    const label = labelOf(str(r.name) || idOf(r), idOf(r));
     if (!/^healthy$/i.test(str(r.health))) couldNotCheck.push(`${label}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
     else couldNotCheck.push(`${label}: status is "${str(r.status) || "not reported"}", so the room computer could not be classed as up.`);
   }
-  const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(str(r.id))!);
+  const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(idOf(r))!);
   const patterns = findPatterns(diagnoses);
 
   const rows: RoomRow[] = diagnoses.map((d, i) => {
@@ -265,7 +268,8 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     return { id: d.room.id, name: d.room.name, level, findings: d.findings.length, top: d.findings[0]?.subject ?? null, couldNotCheck: d.couldNotCheck.length };
   });
   diagnoses.forEach((d, i) => {
-    const label = labels.get(d.room?.id ?? str(problems[i]!.r.id)) ?? d.room?.name ?? "A room";
+    // By the room's row in the list, not the detail's id, which Zoom could give differently.
+    const label = labels.get(idOf(problems[i]!.r)) ?? d.room?.name ?? "A room";
     if (d.couldNotCheck.length) couldNotCheck.push(...d.couldNotCheck.map((c) => `${label}: ${c}`));
   });
 

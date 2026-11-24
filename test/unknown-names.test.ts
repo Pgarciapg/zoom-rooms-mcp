@@ -45,3 +45,25 @@ test("a single unclassed room reads as before", async () => {
   const d = await diagnoseRooms(client([unknown("u1", "Lobby"), problem("p1", "Atrium")]), NOW);
   assert.ok(d.couldNotCheck.some((c) => c.startsWith('Lobby: health is "not reported"')), lines(d));
 });
+
+// From the Sonnet review (2026-11-24).
+test("review: rooms that carry only room_id are told apart too", async () => {
+  const rows = [{ room_id: "r1", name: "Lobby", status: "Available", health: "" }, { room_id: "r2", name: "Lobby", status: "Available", health: "" }];
+  const d = await diagnoseRooms(client(rows), NOW);
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room r1): ")), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room r2): ")), lines(d));
+});
+
+test("review: names that differ only in case count as one name", async () => {
+  const d = await diagnoseRooms(client([unknown("u1", "Lobby"), unknown("u2", "LOBBY")]), NOW);
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room u1): ")), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("LOBBY (Zoom room u2): ")), lines(d));
+});
+
+test("review: a problem room's read lines use its list label even when the detail gives another id", async () => {
+  const rows = [problem("p1", "Lobby"), problem("p2", "Lobby")];
+  const c: ZoomRoomsClient = { ...client(rows), getRoom: async (id) => ({ id: `detail-${id}`, name: "Lobby", issues: [] }), getRoomDevices: async () => { throw new Error("Zoom API 500"); } };
+  const d = await diagnoseRooms(c, NOW);
+  assert.ok(d.couldNotCheck.some((x) => x.startsWith("Lobby (Zoom room p1): ")), lines(d));
+  assert.ok(d.couldNotCheck.some((x) => x.startsWith("Lobby (Zoom room p2): ")), lines(d));
+});
