@@ -25,7 +25,7 @@ export interface FreeRoomAnswer {
   view: "free-rooms";
   attendees: number | null;
   /** The room named as "near", when one was found. */
-  near: { id: string; name: string } | null;
+  near: { id: string; name: string; free?: boolean } | null;
   rooms: FreeRoom[];
   /** Free rooms whose seats were not looked up (past the lookup limit). */
   notLookedUp: number;
@@ -52,6 +52,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
 
   const idOf = (r: Record<string, unknown>) => str(r.id) || str(r.room_id);
   let near: { id: string; name: string; location: string } | null = null;
+  let nearFree = false;
   if (opts.near) {
     const want = opts.near.trim().toLowerCase();
     const byId = rooms.filter((r) => idOf(r).toLowerCase() === want);
@@ -66,6 +67,8 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
       return { ...base, summary: `${distinct.length} rooms are called "${cleanName(opts.near)}" (Zoom room ${distinct.map((r) => cleanName(idOf(r))).join(", ")}). Say which one by its id.`, couldNotCheck };
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
+    // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
+    nearFree = /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health));
     // A room with no Zoom location has no "same location": say so rather than guess a floor.
     if (!near.location) return { ...base, near: { id: near.id, name: near.name }, summary: `${near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
   }
@@ -73,9 +76,10 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   const locations = near ? new Set([near.location]) : new Set(rooms.map((r) => str(r.location_id)));
   const free = freeRoomsIn(rooms, new Set(near ? [near.id] : []), locations);
   const where = near ? ` in the same Zoom location as ${near.name}` : "";
-  const nearOut = near ? { id: near.id, name: near.name } : null;
+  const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;
+  const itself = near && nearFree ? `${near.name} itself is free and healthy right now. ` : "";
   if (!free.length) {
-    const summary = `No room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
+    const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
     return { ...base, near: nearOut, summary, couldNotCheck };
   }
 
@@ -117,6 +121,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     }
     if (rest.length) head += ` ${plural(rest.length, "more free room was", "more free rooms were")} not looked up.`;
   }
+  head = `${itself}${head}`;
   const lines = [head, "", ...rooms_.map((r) => `- ${r.name}${r.name.includes("(Zoom room ") ? "" : ` (Zoom room ${cleanName(r.id)})`}: ${r.text}`), "", CALENDAR];
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
   return { ...base, near: nearOut, rooms: rooms_, notLookedUp: rest.length, couldNotCheck, summary: lines.join("\n") };

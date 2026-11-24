@@ -130,3 +130,16 @@ test("review: a same-named free room carries its id once", async () => {
   assert.ok(a.summary.includes("- Lobby (Zoom room a): seats 5"), a.summary);
   assert.ok(!a.summary.includes("(Zoom room a) (Zoom room a)"), a.summary);
 });
+
+test("the named room itself, when free, is said first and never listed as nearby", async () => {
+  const rooms = [room("b", "Board Room", "L4"), room("h", "Huddle", "L4")];
+  const a = await findFreeRoom(fake(rooms, { h: 4 }), { near: "Board Room" });
+  assert.match(a.summary, /^Board Room itself is free and healthy right now\. 1 room is free and healthy in the same Zoom location as Board Room right now\./);
+  assert.ok(!a.rooms.some((r) => r.name === "Board Room"));
+  assert.equal(a.near!.free, true);
+  const alone = await findFreeRoom(fake([room("b", "Board Room", "L4")]), { near: "b" });
+  assert.match(alone.summary, /^Board Room itself is free and healthy right now\. No other room is free and healthy/);
+  const busy = await findFreeRoom(fake(ROOMS, SEATS), { near: "b" });
+  assert.doesNotMatch(busy.summary, /itself is free/);
+  assert.equal(busy.near!.free, false);
+});
