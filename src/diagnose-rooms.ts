@@ -247,18 +247,38 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const quiet = rooms.filter((r) => !levelOf(r) && !str(r.health) && UP_STATUS.test(str(r.status)) && (str(r.id) || str(r.room_id)));
   const spare = Math.max(0, limit - diagnoses.length);
   const probed = await Promise.all(quiet.slice(0, spare).map((r) => diagnoseRoom(client, str(r.id) || str(r.room_id), now, r, places).then((d) => ({ r, d }))));
+  const probeFailed: { r: any; why: string }[] = [];
   for (const { r, d } of probed) {
-    if (!d.findings.length) continue;
+    // diagnoseRoom always notes the missing health; that is why the room was read, so it is not repeated here.
+    const gaps = d.couldNotCheck.filter((c) => !/^Health: "not reported"/.test(c));
+    if (!d.findings.length) {
+      // Read cleanly: it stays among the rooms Zoom gives no health for. A failed read says what failed instead.
+      if (!d.room || gaps.length) {
+        probeFailed.push({ r, why: d.room ? `part of it could not be read (${gaps.join("; ")})` : `it could not be read (${d.summary})` });
+        unclassed = unclassed.filter((u) => u !== r);
+      }
+      continue;
+    }
     problems.push({ r, level: d.findings.some((f) => f.level === "critical") ? "critical" : "warning" });
     diagnoses.push(d);
     unclassed = unclassed.filter((u) => u !== r);
   }
+  // Rooms found by reading them keep the worst-first order (critical before warning, offline first) with the rest.
+  if (probed.some(({ d }) => d.findings.length)) {
+    const rank = (x: { r: any; level: string | null }) => (x.level === "critical" ? 0 : 2) - Number(str(x.r.status).toLowerCase() === "offline");
+    const pairs = problems.map((x, i) => ({ x, d: diagnoses[i]! })).sort((a, b) => rank(a.x) - rank(b.x));
+    problems.splice(0, problems.length, ...pairs.map((p) => p.x));
+    diagnoses.splice(0, diagnoses.length, ...pairs.map((p) => p.d));
+  }
+  const unprobed = quiet.length - probed.length;
+  const probeNotes: string[] = [];
+  if (unprobed > 0) probeNotes.push(`${plural(unprobed, "more room")} with no health from Zoom ${unprobed === 1 ? "was" : "were"} not read (past the limit of ${limit} rooms read per call).`);
   const placeNote = places.note();
   // A name two rooms named in this answer share (problem rooms and unclassed rooms) carries Zoom's room id, the same
   // label the other tools use for problem rooms. Healthy rooms are never named, so a healthy twin adds nothing.
   // get_rooms_needing_attention never names unclassed rooms, so there a problem room with only an unclassed twin
   // stays bare; adding the id here is more information, never a different room.
-  const named = [...problems.map(({ r }) => r), ...unclassed];
+  const named = [...problems.map(({ r }) => r), ...unclassed, ...probeFailed.map((p) => p.r)];
   const shared = (name: string) => named.filter((r) => (str(r.name) || str(r.id)).toLowerCase() === name.toLowerCase()).length > 1;
   const labelOf = (name: string, id: string) => (shared(name) && id && name !== id ? `${name} (Zoom room ${cleanName(id)})` : name);
   // One label per room, from its row in the room list (the detail's name can differ), looked up by id everywhere.
@@ -269,6 +289,8 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     if (!/^healthy$/i.test(str(r.health))) couldNotCheck.push(`${label}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
     else couldNotCheck.push(`${label}: status is "${str(r.status) || "not reported"}", so the room computer could not be classed as up.`);
   }
+  for (const { r, why } of probeFailed) couldNotCheck.push(`${labelOf(str(r.name) || idOf(r), idOf(r))}: Zoom gives no health and ${why}.`);
+  couldNotCheck.push(...probeNotes);
   const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(idOf(r))!);
   const patterns = findPatterns(diagnoses);
 

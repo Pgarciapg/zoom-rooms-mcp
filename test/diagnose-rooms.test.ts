@@ -236,3 +236,27 @@ test("an Available room with no health field whose controller is Offline is diag
   assert.match(d.summary, /\(id br\): warning, 1 finding; first: Zoom Rooms Controller \(Controller\): Offline/);
   assert.doesNotMatch(d.summary, /\(id q\)/);
 });
+
+test("review: a critical room found by reading a no-health room is listed before warning rooms", async () => {
+  const rows = [row("w1", "Available", "Warning"), { id: "nh", name: "NH", status: "Available" }];
+  const devs = { w1: ok, nh: [{ name: "Rally", device_type: "Camera", status: "Offline" }] };
+  const details = { w1: detail("w1", { issues: [{ issue: "Controller high CPU (92%)", severity: "warning" }] }), nh: detail("nh", { issues: [{ issue: "Camera disconnected", severity: "critical" }] }) };
+  const d = await diagnoseRooms(account(rows, details, devs), NOW);
+  assert.deepEqual(d.rooms.map((r) => r.id), ["nh", "w1"], d.summary);
+});
+
+test("review: a no-health room that could not be read says so; one read cleanly is not flagged", async () => {
+  const rows = [{ id: "bad", name: "Bad", status: "Available" }, { id: "good", name: "Good", status: "Available" }];
+  const d = await diagnoseRooms(account(rows, { good: detail("good") }, { good: ok }, { getRoomDevices: async (id) => { if (id === "bad") throw new Error("Zoom API 500"); return { devices: ok }; } }), NOW);
+  const text = d.couldNotCheck.join(" | ");
+  assert.match(text, /BAD|Bad/);
+  assert.match(text, /could not be read/);
+  assert.doesNotMatch(text, /GOOD: Zoom gives no health and/);
+  assert.equal(d.allClear, false);
+});
+
+test("review: no-health rooms past the limit are counted as not read", async () => {
+  const rows = ["a", "b", "c"].map((id) => ({ id, name: id, status: "Available" }));
+  const d = await diagnoseRooms(account(rows, { a: detail("a"), b: detail("b"), c: detail("c") }, { a: ok, b: ok, c: ok }), NOW, 2);
+  assert.match(d.couldNotCheck.join(" | "), /1 more room with no health from Zoom was not read/);
+});
