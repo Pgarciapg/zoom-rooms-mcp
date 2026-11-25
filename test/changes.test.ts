@@ -218,7 +218,7 @@ test("review: an unreadable or missing issues list is unknown, never 'Issue clos
     assert.doesNotMatch(r.content[0]!.text, /Issue closed/, variant);
     // Since 11/25 a profile with no issues list (Zoom's documented shape) still has its devices compared.
     if (variant === "odd-issue") assert.match(r.content[0]!.text, /Room Two: issues and devices could not be read/, variant);
-    else assert.match(r.content[0]!.text, /Room Two: open issues \(Zoom's room profile gave no issues list\); its devices were compared/, variant);
+    else assert.match(r.content[0]!.text, /Open issues for Room Two: Zoom's room profile gives no issues list, so only status, health and devices were compared/, variant);
   }
 });
 

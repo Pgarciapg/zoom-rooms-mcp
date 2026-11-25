@@ -164,7 +164,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     const r = quiet.find((q) => str(q.id) === room.id)!;
     problems.push({ r, level: room.level });
     detailed.push(room);
-    unknownHealth.splice(unknownHealth.indexOf(r), 1);
+    if (unknownHealth.includes(r)) unknownHealth.splice(unknownHealth.indexOf(r), 1);
   }
   if (quiet.length > spare) couldNotCheck.push(`${quiet.length - spare} more ${quiet.length - spare === 1 ? "room" : "rooms"} with no health from Zoom ${quiet.length - spare === 1 ? "was" : "were"} not read (past the limit of ${limit} rooms read per call).`);
   for (const r of unknownHealth) couldNotCheck.push(`${str(r.name) || str(r.id)}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);

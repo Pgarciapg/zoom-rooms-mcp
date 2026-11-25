@@ -269,6 +269,7 @@ const healthRank = (h: string) => HEALTH_RANK[h.toLowerCase()];
 
 /** Compare a fresh reading with the saved snapshot. */
 export const compare = (reading: Reading, previous: Snapshot | null, now: number): ChangeReport => {
+  const issuesUnread: string[] = [];
   const notCompared = [...reading.couldNotCheck, ...reading.skippedDetail.map((n) => `${n}: past the ${DETAIL_LIMIT}-room detail limit, so its issues and devices were not compared`)];
   if (!previous) {
     const summary = "No previous check to compare against.";
@@ -312,7 +313,8 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       continue;
     }
     detailWas = carryUnnamed(detailWas, detailNow);
-    if (detailWas.issuesRead === false || detailNow.issuesRead === false) notCompared.push(`${now_.name}: open issues (Zoom's room profile gave no issues list${detailWas.issuesRead === false && detailNow.issuesRead !== false ? " last time" : ""}); its devices were compared`);
+    // One line for all such rooms, not one per room per check (Sonnet review, 11/25): on a live account it is all of them.
+    if (detailWas.issuesRead === false || detailNow.issuesRead === false) issuesUnread.push(now_.name);
     else {
       const wasKeys = new Set(detailWas.issues.map(issueKey));
       const nowKeys = new Set(detailNow.issues.map(issueKey));
@@ -338,6 +340,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   }
   const order: Record<Direction, number> = { worse: 0, changed: 1, better: 2 };
   changes.sort((a, b) => order[a.direction] - order[b.direction]);
+  if (issuesUnread.length) notCompared.push(`Open issues for ${issuesUnread.length === 1 ? issuesUnread[0] : `${issuesUnread.length} rooms`}: Zoom's room profile gives no issues list, so only status, health and devices were compared`);
   // "Since the last check" is the latest reading; rooms kept from an older check (a partial list) say how old theirs is.
   times.sort();
   const since = times.length ? times.at(-1)! : null;
