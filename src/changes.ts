@@ -4,7 +4,10 @@
 // dropped or recovered, rooms added or removed. Worst first. Read-only toward Zoom; it writes only its own snapshot file.
 // Anything not read this time keeps its last good reading and is listed as not compared, never as fixed or cleared.
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+
+/** A save lock older than this was left by a process that stopped mid-save. */
+export const LOCK_STALE_MS = 30_000;
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ZoomRoomsClient } from "./client.ts";
@@ -44,6 +47,8 @@ export interface Snapshot {
 export interface SnapshotStore {
   load(): Snapshot | null;
   save(s: Snapshot): void;
+  /** Runs fn while no other process can save to the same place (file stores); a store in memory just runs it. */
+  exclusive?<T>(fn: () => T): T;
   readonly where: string;
 }
 
@@ -101,6 +106,35 @@ export class FileSnapshotStore implements SnapshotStore {
     writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, this.where);
+  }
+  /**
+   * Runs fn holding a lock file next to the saved check, so two copies of this server (two chats) never check and save
+   * at the same time (Codex review, 11/25). A lock left by a crashed process is taken over after LOCK_STALE_MS.
+   */
+  exclusive<T>(fn: () => T): T {
+    mkdirSync(dirname(this.where), { recursive: true, mode: 0o700 });
+    const lock = `${this.where}.lock`;
+    let fd: number;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let stale = false;
+      try {
+        stale = Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS;
+      } catch {
+        stale = true;
+      }
+      if (!stale) throw new Error("another check is being saved right now");
+      rmSync(lock, { force: true });
+      fd = openSync(lock, "wx", 0o600);
+    }
+    try {
+      return fn();
+    } finally {
+      closeSync(fd);
+      rmSync(lock, { force: true });
+    }
   }
   /** Moves an unreadable file aside (kept, not deleted) so a fresh starting point can be saved. */
   setAside(now: number): string {
@@ -362,6 +396,16 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   return { summary, text: lines.join("\n"), changes, notCompared, firstRun: false };
 };
 
+/**
+ * Issues not read this time (no issues list in Zoom's room profile) keep their last reading, so a later check that can
+ * read them still sees an open camera issue close (Codex review, 11/25). Devices are always this reading's.
+ */
+const keepIssues = (now_: RoomDetailFacts, before: RoomDetailFacts | undefined): RoomDetailFacts => {
+  if (now_.issuesRead !== false || !before || before.issuesRead === false) return now_;
+  const { issuesRead: _unread, ...rest } = now_;
+  return { ...rest, issues: [...before.issues] };
+};
+
 /** The next snapshot: this reading, with every part not read this time kept from the last one. */
 export const nextSnapshot = (reading: Reading, previous: Snapshot | null, account: string, now: number): Snapshot => {
   const at = new Date(now).toISOString();
@@ -374,7 +418,7 @@ export const nextSnapshot = (reading: Reading, previous: Snapshot | null, accoun
     rooms[id] = {
       list: { ...f, at },
       // Only what was actually read is saved; a part not read keeps its last reading (or stays unknown).
-      ...(detail ? { detail: { ...detail, at } } : before?.detail ? { detail: structuredClone(before.detail) } : {}),
+      ...(detail ? { detail: { ...keepIssues(detail, before?.detail), at } } : before?.detail ? { detail: structuredClone(before.detail) } : {}),
     };
   }
   return { version: 1, account, fullListAt: reading.fullList ? at : previous?.fullListAt ?? null, rooms };

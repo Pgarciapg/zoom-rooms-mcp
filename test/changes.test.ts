@@ -374,3 +374,30 @@ test("a check never overwrites a newer one another process saved while it was re
   assert.match(r.content[0]!.text, /could NOT be saved \(another check was saved while this one was reading Zoom/);
   assert.equal(store.load()!.rooms.r1!.list.status, "Offline");
 });
+
+// Codex review of bc4f318 (HIGH): a profile without issues must not erase the last known open issue.
+test("an open issue survives a check whose profile has no issues list, and its closure is reported later", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c); // Room Two: "Microphone offline" open
+  const plain: ZoomRoomsClient = { ...client, getRoom: async (id) => ({ id }) };
+  await call(await connect(plain, { snapshots: store, source: "zoom", account: "acct" }));
+  assert.deepEqual(store.load()!.rooms.r2!.detail!.issues, ["Microphone offline"]);
+  state.issues = { r2: [] };
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /Issue closed: Microphone offline/, text);
+});
+
+test("the file store's save lock: a fresh lock blocks, a stale one is taken over", async () => {
+  const { mkdtempSync, writeFileSync: write, utimesSync, existsSync: exists } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/zoom-lock-`);
+  const store = new FileSnapshotStore(`${dir}/state.json`);
+  write(`${dir}/state.json.lock`, "");
+  assert.throws(() => store.exclusive(() => 1), /another check is being saved right now/);
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(`${dir}/state.json.lock`, old, old);
+  assert.equal(store.exclusive(() => 2), 2);
+  assert.equal(exists(`${dir}/state.json.lock`), false);
+});

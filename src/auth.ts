@@ -1,3 +1,6 @@
+
+/** How long any one Zoom call may take before it fails with a clear error. */
+export const ZOOM_TIMEOUT_MS = 30_000;
 export interface ZoomCredentials {
   accountId: string;
   clientId: string;
@@ -31,6 +34,8 @@ export async function getAccessToken(creds: ZoomCredentials): Promise<string> {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: `grant_type=account_credentials&account_id=${encodeURIComponent(creds.accountId)}`,
+    // A stalled Zoom never holds a tool (or the what_changed queue) forever (Codex review, 11/25).
+    signal: AbortSignal.timeout(ZOOM_TIMEOUT_MS),
   });
 
   if (!res.ok) {

@@ -1,4 +1,4 @@
-import { getAccessToken, type ZoomCredentials } from "./auth.ts";
+import { getAccessToken, ZOOM_TIMEOUT_MS, type ZoomCredentials } from "./auth.ts";
 import { DEMO_SEATS, EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_LOCATIONS, MOCK_ROOM_DETAILS, MOCK_ROOM_DEVICES, MOCK_ROOMS } from "./demo-data.ts";
 
 /** The read-only Zoom Rooms calls the MCP tools need. */
@@ -36,9 +36,17 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
 
   private async request(path: string): Promise<unknown> {
     const token = await getAccessToken(this.creds);
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        // A stalled Zoom never holds a tool (or the what_changed queue) forever (Codex review, 11/25).
+        signal: AbortSignal.timeout(ZOOM_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw new ZoomApiError(504, `Zoom did not answer ${path} within ${ZOOM_TIMEOUT_MS / 1000} s.`);
+      throw error;
+    }
     if (!res.ok) {
       const body = await res.text();
       throw new ZoomApiError(res.status, `Zoom API ${res.status} on ${path}: ${body}`);

@@ -136,14 +136,20 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
           try {
             // Another copy of this server (a second chat or app) may have saved a newer check while this one read Zoom
             // (Codex review, 11/25). Never overwrite it: save only when the starting point is still the one compared.
-            let latest: unknown = null;
-            try {
-              latest = store.load();
-            } catch {
-              latest = undefined;
-            }
-            if (JSON.stringify(latest) !== JSON.stringify(previous)) throw new Error("another check was saved while this one was reading Zoom, so that newer one was kept");
-            store.save(nextSnapshot(reading, previous, accountKey, t));
+            // The check and the save happen under one lock, so no other process can save in between.
+            const s = store;
+            const guarded = () => {
+              let latest: unknown = null;
+              try {
+                latest = s.load();
+              } catch {
+                latest = undefined;
+              }
+              if (JSON.stringify(latest) !== JSON.stringify(previous)) throw new Error("another check was saved while this one was reading Zoom, so that newer one was kept");
+              s.save(nextSnapshot(reading, previous, accountKey!, t));
+            };
+            if (s.exclusive) s.exclusive(guarded);
+            else guarded();
           } catch (error) {
             saved = `This check could NOT be saved (${error instanceof Error ? error.message : String(error)}), so next time compares against the older check.`;
           }

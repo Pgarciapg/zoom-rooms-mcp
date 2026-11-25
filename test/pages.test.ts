@@ -92,3 +92,20 @@ test("a room profile's activation code is dropped too", async (t) => {
   const room = await new HttpZoomRoomsClient(creds()).getRoom("a");
   assert.doesNotMatch(JSON.stringify(room), /SECRET/);
 });
+
+// Codex review of bc4f318 (HIGH): a stalled Zoom call must end, so it never holds the what_changed queue forever.
+test("every Zoom call carries a timeout, and a timeout reads as a clear Zoom error", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const signals: unknown[] = [];
+  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    signals.push(init?.signal);
+    if (String(input).endsWith("/oauth/token")) return new Response(JSON.stringify({ access_token: "t", token_type: "bearer", expires_in: 3600 }), { status: 200 });
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  }) as typeof fetch;
+  await assert.rejects(new HttpZoomRoomsClient(creds()).getRoom("a"), /Zoom did not answer \/rooms\/a within 30 s/);
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every((s) => s instanceof AbortSignal));
+});
