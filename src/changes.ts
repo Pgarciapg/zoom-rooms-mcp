@@ -15,6 +15,14 @@ import { deviceName } from "./device-fields.ts";
 
 /** Rooms read in detail (issues and devices) per check: rooms that look unhappy now or did last time. */
 export const DETAIL_LIMIT = 25;
+/** Room detail reads run this many at a time. */
+export const DETAIL_CONCURRENCY = 5;
+/**
+ * Room details stop being read this long after the check starts (room list included), so what_changed answers well
+ * inside an MCP client's usual 60 s deadline even when Zoom is slow; rooms not read in time are named and keep their
+ * last saved reading.
+ */
+export const DETAIL_BUDGET_MS = 40_000;
 
 export interface RoomListFacts {
   name: string;
@@ -248,7 +256,8 @@ const carryUnnamed = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts):
 };
 
 /** Reads the room list, then the detail of every room that looks unhappy now or did last time (up to DETAIL_LIMIT). */
-export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null): Promise<Reading> => {
+export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null, opts: { budgetMs?: number; concurrency?: number } = {}): Promise<Reading> => {
+  const started = Date.now();
   const couldNotCheck: string[] = [];
   const list = await client.listRooms();
   const rawRows = Array.isArray(list) ? list : (list as any)?.rooms;
@@ -284,12 +293,38 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   wanted.sort(([, a], [, b]) => (unhappy(b) ? 1 : 0) - (unhappy(a) ? 1 : 0));
   const details = new Map<string, RoomDetailFacts>();
   const skippedDetail = wanted.slice(DETAIL_LIMIT).map(([, f]) => f.name);
-  for (const [id, f] of wanted.slice(0, DETAIL_LIMIT)) {
-    try {
-      details.set(id, await readDetail(client, id));
-    } catch (error) {
-      couldNotCheck.push(`${f.name}: issues and devices could not be read (${msg(error)})`);
+  // A few rooms at a time, inside one time budget, so a slow Zoom still gets an answer back before the MCP client's
+  // 60 s deadline (Codex review, 11/25). A room not read in time is named and keeps its last saved reading.
+  const queue = wanted.slice(0, DETAIL_LIMIT);
+  const budgetMs = opts.budgetMs ?? DETAIL_BUDGET_MS;
+  const deadline = started + budgetMs;
+  const failed = new Map<string, string>();
+  let next = 0;
+  const worker = async () => {
+    while (next < queue.length) {
+      const left = deadline - Date.now();
+      if (left <= 0) return;
+      const [id] = queue[next++]!;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<"late">((resolve) => {
+        timer = setTimeout(() => resolve("late"), left);
+      });
+      try {
+        const got = await Promise.race([readDetail(client, id), late]);
+        if (got !== "late") details.set(id, got);
+      } catch (error) {
+        failed.set(id, msg(error));
+      } finally {
+        clearTimeout(timer);
+      }
     }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? DETAIL_CONCURRENCY, queue.length)) }, worker));
+  // In list order, so the report reads the same however the reads interleaved.
+  for (const [id, f] of queue) {
+    if (details.has(id)) continue;
+    if (failed.has(id)) couldNotCheck.push(`${f.name}: issues and devices could not be read (${failed.get(id)})`);
+    else couldNotCheck.push(`${f.name}: issues and devices not read; Zoom was slow, so room details stopped after ${Math.round(budgetMs / 1000)} s to answer in time`);
   }
   return { rooms, details, fullList, couldNotCheck, skippedDetail };
 };

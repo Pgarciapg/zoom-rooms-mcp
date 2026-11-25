@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -416,4 +416,53 @@ test("review: a lock is removed only by its holder, and a stale one is taken ove
   utimesSync(`${dir}/state.json.lock`, old, old);
   assert.equal(store.exclusive(() => 3), 3);
   assert.equal(exists(`${dir}/state.json.lock`), false);
+});
+
+// ---- Codex review 11/25 (HIGH): 25 rooms with slow device reads must still answer inside the 60 s MCP deadline ----
+const slowAccount = (n: number, deviceMs: number) => {
+  // Zoom omits health, so every room needs a detail read.
+  const rooms = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, name: `Slow ${i}`, status: "Available" }));
+  const client: ZoomRoomsClient = {
+    listRooms: async () => ({ rooms, next_page_token: "" }),
+    getRoom: async (id) => ({ id, issues: [] }),
+    getRoomDevices: () => new Promise((resolve) => setTimeout(() => resolve({ devices: [{ name: "Controller", device_type: "Controller", status: "Offline" }] }), deviceMs)),
+  };
+  return client;
+};
+
+test("review: 25 rooms whose device reads take 3 s each are all read well inside 60 s", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
+  try {
+    let done: Awaited<ReturnType<typeof readAccount>> | undefined;
+    const p = readAccount(slowAccount(25, 3_000), null).then((r) => (done = r));
+    for (let s = 0; s < 60 && !done; s++) {
+      mock.timers.tick(1_000);
+      for (let k = 0; k < 20; k++) await Promise.resolve();
+    }
+    assert.ok(done, "what_changed's reading did not finish within 60 s");
+    await p;
+    assert.equal(done!.details.size, 25);
+    assert.ok(Date.now() - NOW <= 20_000, `took ${(Date.now() - NOW) / 1000} s`);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("review: when Zoom is too slow for the time budget, the check answers in time, names unread rooms and keeps their last reading", async () => {
+  // First check: every room read, each with an offline controller.
+  const fast = slowAccount(25, 0);
+  const first = await readAccount(fast, null);
+  const snap = nextSnapshot(first, null, "acct", NOW - DAY);
+  assert.equal(Object.values(snap.rooms).filter((r) => r.detail).length, 25);
+  // Second check: device reads take 100 ms, budget 250 ms, 5 at a time -> only some rooms read.
+  const t0 = Date.now();
+  const reading = await readAccount(slowAccount(25, 100), snap, { budgetMs: 250, concurrency: 5 });
+  const took = Date.now() - t0;
+  assert.ok(took < 1_000, `took ${took} ms; reads were not bounded`);
+  assert.ok(reading.details.size > 0 && reading.details.size < 25, `read ${reading.details.size}`);
+  const unread = [...reading.rooms.keys()].filter((id) => !reading.details.has(id));
+  const out = compare(reading, snap, NOW);
+  for (const id of unread) assert.ok(out.notCompared.some((n) => n.startsWith(`${reading.rooms.get(id)!.name}: issues and devices not read; Zoom was slow`)), id);
+  const next = nextSnapshot(reading, snap, "acct", NOW);
+  for (const id of unread) assert.deepEqual(next.rooms[id]!.detail, snap.rooms[id]!.detail, `${id} lost its last reading`);
 });
