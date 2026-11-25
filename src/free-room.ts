@@ -57,6 +57,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   let near: { id: string; name: string; location: string } | null = null;
   let place: { name: string; codes: Set<string> } | null = null;
   let nearFree = false;
+  let nearNoHealth = "";
   if (opts.near) {
     // Cleaned the same way stored names are (control characters, length), and runs of spaces count as one.
     const squash = (t: string) => cleanName(t).replace(/\s+/g, " ").toLowerCase();
@@ -102,8 +103,9 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
     nearFree = isFreeNow(r);
+    nearNoHealth = str(r.health) ? "" : " (Zoom gives no health)";
     // A room with no Zoom location has no "same location": say so rather than guess a floor.
-    if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is free and healthy right now, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
+    if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
     }
   }
 
@@ -118,7 +120,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     // A room with no Zoom id has no room profile to read: its seats are said as unknown, never looked up with an empty id.
     const own = attendees != null && near.id ? (await lookUpFits(client, [near.id], attendees))[0]! : null;
     const unknown = attendees != null && !near.id ? " (its seats can't be looked up: it has no Zoom id)" : "";
-    itself = `${near.name} itself is free and healthy right now${own ? ` (${own.text})` : unknown}. `;
+    itself = `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}${own ? ` (${own.text})` : unknown}. `;
   }
   if (!free.length) {
     const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;

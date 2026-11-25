@@ -344,3 +344,9 @@ test("a free room with no health field in Zoom's list is still offered, marked a
   const free = freeRoomsIn([{ id: "big", name: "Room 12", location_id: "L1", status: "Available" }, { id: "w", name: "Warn", location_id: "L1", status: "Available", health: "Warning" }], new Set(), new Set(["L1"]));
   assert.deepEqual(free, [{ id: "big", name: "Room 12 (Zoom gives no health)" }]);
 });
+
+test("review: two same-named free rooms with no health keep the id suffix last", () => {
+  const row = (id: string) => ({ id, name: "Huddle", location_id: "L1", status: "Available" });
+  const free = freeRoomsIn([row("r1"), row("r2")], new Set(), new Set(["L1"]));
+  assert.deepEqual(free.map((f) => f.name), ["Huddle (Zoom gives no health) (Zoom room r1)", "Huddle (Zoom gives no health) (Zoom room r2)"]);
+});

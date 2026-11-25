@@ -248,3 +248,10 @@ test("find_free_room for 8 offers an Available 12-seat room when Zoom's list has
   assert.match(JSON.stringify(a), /Twelve/);
   assert.doesNotMatch(a.summary, /No (other )?room is free/);
 });
+
+test("review: the named room with no health is called free, not free and healthy", async () => {
+  const rows = [{ id: "b", name: "Board Room", status: "Available", location_id: "L4" }];
+  const a: any = await findFreeRoom(fake(rows), { near: "Board Room" });
+  assert.match(a.summary, /Board Room itself is free right now \(Zoom gives no health\)/);
+  assert.doesNotMatch(a.summary, /Board Room itself is free and healthy/);
+});

@@ -29,12 +29,14 @@ export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<
       return { id, name: cleanName(str(r.name)) || cleanName(id) || "Unnamed room", noHealth: !str(r.health) };
     })
     .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
-    // "Room 2" before "Room 10".
     // Rooms Zoom calls Healthy before rooms with no health given; then "Room 2" before "Room 10".
     .sort((a, b) => Number(a.noHealth) - Number(b.noHealth) || a.name.localeCompare(b.name, undefined, { numeric: true }))
-    // Two free rooms here with the same name: add Zoom's room id, so a meeting is not moved into the wrong one.
-    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id)})` } : r))
-    .map(({ noHealth, ...r }) => (noHealth ? { ...r, name: `${r.name} (Zoom gives no health)` } : r));
+    // Two free rooms here with the same name: add Zoom's room id, so a meeting is not moved into the wrong one. The id
+    // suffix always ends the name (callers check endsWith), so the no-health marker goes before it.
+    .map(({ noHealth, ...r }, _i, all) => {
+      const name = noHealth ? `${r.name} (Zoom gives no health)` : r.name;
+      return { ...r, name: all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? `${name} (Zoom room ${cleanName(r.id)})` : name };
+    });
 };
 
 /** "A", "A and B", "A, B and C". */
