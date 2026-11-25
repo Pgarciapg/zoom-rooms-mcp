@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ZoomRoomsClient } from "./client.ts";
+import { deviceName } from "./device-fields.ts";
 
 /** Rooms read in detail (issues and devices) per check: rooms that look unhappy now or did last time. */
 export const DETAIL_LIMIT = 25;
@@ -150,7 +151,7 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
   for (const d of rawDevices) {
     if (!isObj(d)) throw new Error("a device came back in a shape that could not be read");
     const status = str(d.status);
-    const name = `${str(d.name) || "Unnamed device"} (${str(d.device_type) || "device"})`;
+    const name = `${deviceName(d) || "Unnamed device"} (${str(d.device_type) || "device"})`;
     seen.add(name);
     if (OK_DEVICE.test(status)) continue;
     down[name] = status || "unknown";

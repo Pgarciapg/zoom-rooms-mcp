@@ -218,3 +218,11 @@ test("review: grammar for one room", async () => {
   const d = await diagnoseRooms(account([row("a", "Available", "Warning")], { a: detail("a") }, { a: ok }), NOW);
   assert.match(d.summary, /^1 of 1 room needs attention\./);
 });
+
+test("documented device rows (device_hostname, device_firmware) still form a same-model group with their firmware", async () => {
+  const cam = { device_hostname: "Logitech Rally", device_type: "Camera", status: "Disconnected", device_firmware: "1.4.3" };
+  const r = await diagnoseRooms(account([row("a", "Available", "Warning"), row("b", "Available", "Warning")], { a: detail("a"), b: detail("b") }, { a: [cam], b: [cam] }), NOW);
+  const p = r.patterns.find((x: any) => x.kind === "same-model");
+  assert.ok(p, JSON.stringify(r.patterns));
+  assert.match(p!.title, /Logitech Rally \(Camera\) failing in 2 rooms, all on firmware 1\.4\.3/);
+});

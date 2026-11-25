@@ -7,6 +7,7 @@ import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
 import { allocateMoveTo, besideRoom, cleanName, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
+import { deviceName } from "./device-fields.ts";
 
 export type Level = "critical" | "warning";
 
@@ -141,7 +142,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const code = str(detail?.location_id) || str(r.location_id);
       const where = fromDetail || (code ? await places.name(code) : null);
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null, age: i.since ? ago(str(i.since), now) : null }));
-      const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${str(d.name) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
+      const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${deviceName(d) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
       // Exactly "In Meeting" (any case or spacing): "Not in meeting" is not a meeting.
       const inMeeting = /^\s*in ?meeting\s*$/i.test(str(r.status));

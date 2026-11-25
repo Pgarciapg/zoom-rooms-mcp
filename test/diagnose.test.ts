@@ -236,3 +236,12 @@ test("review: a room detail with no issues list is not an all-clear", async () =
   const one = await diagnoseRoom(fake(room(), [cam]), "r1", NOW);
   assert.equal(one.summary, "R1: all clear. Health is Healthy, the room computer is Available, and its 1 device is online.");
 });
+
+// Medium from the 11/24 review: Zoom's documented device row uses device_hostname and device_firmware, and its room
+// profile keeps the name under basic.
+test("a documented device row keeps its name and firmware, and a profile's basic.name names the room", async () => {
+  const d = await diagnoseRoom(fake({ id: "r1", basic: { name: "Board Room" }, status: "Available", health: "Healthy", issues: [] }, [{ device_hostname: "Panel", device_type: "Controller", status: "Offline", device_firmware: "1.2" }]), "r1", NOW);
+  assert.equal(d.room?.name, "Board Room");
+  assert.deepEqual(d.devices.map((x) => [x.name, x.firmware]), [["Panel", "1.2"]]);
+  assert.match(d.findings.map((f) => f.subject).join("|"), /Panel \(Controller\)/);
+});

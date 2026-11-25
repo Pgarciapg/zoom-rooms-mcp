@@ -9,6 +9,7 @@ import { PlaceNamer } from "./locations.ts";
 import { besideRoom, cleanName, FIT_LOOKUP_LIMIT, readCapacity, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { ago } from "./ago.ts";
+import { deviceFirmware, deviceName } from "./device-fields.ts";
 
 export type FindingLevel = "critical" | "warning";
 
@@ -153,7 +154,8 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   let placeNote: string | null = null;
   const room: RoomFacts = {
     id: str(detail?.id) || str(listed?.id) || roomId,
-    name: str(detail?.name) || str(listed?.name) || roomId,
+    // Zoom's documented room profile keeps the name under `basic`.
+    name: str(detail?.name) || (isObj(detail?.basic) ? str(detail.basic.name) : "") || str(listed?.name) || roomId,
     where: null,
     placeKey: null,
     status: str(detail?.status) || str(listed?.status),
@@ -191,7 +193,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   if (deviceData && deviceRows.length < deviceData.length) couldNotCheck.push(`Devices: ${plural(deviceData.length - deviceRows.length, "entry")} in the device list could not be read.`.replace("entrys", "entries"));
   const devices: DeviceRow[] = deviceRows.map((d) => {
     const status = str(d.status) || "no status";
-    return { name: str(d.name) || "Device", type: str(d.device_type) || "device", status, firmware: d.firmware ? str(d.firmware) : null, ok: OK_DEVICE.test(status) };
+    return { name: deviceName(d) || "Device", type: str(d.device_type) || "device", status, firmware: deviceFirmware(d) || null, ok: OK_DEVICE.test(status) };
   });
   // An empty device list usually means Zoom could not see the devices, not that the room has none.
   if (deviceData && deviceData.length === 0) couldNotCheck.push("Devices: Zoom listed no devices for this room, so none could be checked.");
