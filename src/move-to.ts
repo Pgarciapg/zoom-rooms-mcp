@@ -11,22 +11,30 @@ export const MOVE_TO_LIMIT = 3;
 /** A room name as shown in a one-line suggestion: no line breaks or control characters, short. */
 export const cleanName = (n: string) => n.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 60);
 
+/**
+ * Free in Zoom's room list: Available, and Healthy or no health given. Zoom's documented room list has no `health`
+ * field (11/24 review), so a missing one cannot rule a room out; only a reported Warning, Critical or other value does.
+ */
+export const isFreeNow = (r: Record<string, unknown>) => /^available$/i.test(str(r.status)) && (!str(r.health) || /^healthy$/i.test(str(r.health)));
+
 /** Free, healthy rooms in the given location codes, not the room itself, deduped by id, sorted by name. */
 export const freeRoomsIn = (rooms: unknown[], self: Set<string>, locations: Set<string>): { id: string; name: string }[] => {
   const seen = new Set<string>();
   return rooms
     .filter(isObj)
     .filter((r) => !!(str(r.id) || str(r.room_id)) && !self.has(str(r.id)) && !self.has(str(r.room_id)))
-    .filter((r) => locations.has(str(r.location_id)) && /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health)))
+    .filter((r) => locations.has(str(r.location_id)) && isFreeNow(r))
     .map((r) => {
       const id = str(r.id) || str(r.room_id);
-      return { id, name: cleanName(str(r.name)) || cleanName(id) || "Unnamed room" };
+      return { id, name: cleanName(str(r.name)) || cleanName(id) || "Unnamed room", noHealth: !str(r.health) };
     })
     .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
     // "Room 2" before "Room 10".
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    // Rooms Zoom calls Healthy before rooms with no health given; then "Room 2" before "Room 10".
+    .sort((a, b) => Number(a.noHealth) - Number(b.noHealth) || a.name.localeCompare(b.name, undefined, { numeric: true }))
     // Two free rooms here with the same name: add Zoom's room id, so a meeting is not moved into the wrong one.
-    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id)})` } : r));
+    .map((r, _i, all) => (all.filter((o) => o.name.toLowerCase() === r.name.toLowerCase()).length > 1 ? { ...r, name: `${r.name} (Zoom room ${cleanName(r.id)})` } : r))
+    .map(({ noHealth, ...r }) => (noHealth ? { ...r, name: `${r.name} (Zoom gives no health)` } : r));
 };
 
 /** "A", "A and B", "A, B and C". */

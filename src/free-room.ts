@@ -5,7 +5,7 @@
 // It only reads: nothing is booked. Zoom's room list says whether a room is in a meeting now, not whether it is booked
 // later, so the answer says to check the room's calendar before taking it.
 import type { ZoomRoomsClient } from "./client.ts";
-import { cleanName, FIT_LOOKUP_LIMIT, freeRoomsIn, lookUpFits, type Fit } from "./move-to.ts";
+import { cleanName, FIT_LOOKUP_LIMIT, freeRoomsIn, isFreeNow, lookUpFits, type Fit } from "./move-to.ts";
 import { findPlace } from "./locations.ts";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == null ? "" : typeof v === "object" ? "" : String(v));
@@ -101,7 +101,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     const r = distinct[0]!;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
-    nearFree = /^available$/i.test(str(r.status)) && /^healthy$/i.test(str(r.health));
+    nearFree = isFreeNow(r);
     // A room with no Zoom location has no "same location": say so rather than guess a floor.
     if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is free and healthy right now, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
     }

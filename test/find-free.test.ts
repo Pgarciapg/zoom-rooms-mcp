@@ -240,3 +240,11 @@ test("a room name still wins over a place name; no room and no place still says 
   const nothing = await findFreeRoom(demo, { near: "Moon Base" });
   assert.match(nothing.summary, /No room or place called "Moon Base"/);
 });
+
+// BLOCKS SHIP from the 11/24 9:25 PM Codex review: Zoom's documented room list has no `health` field.
+test("find_free_room for 8 offers an Available 12-seat room when Zoom's list has no health field", async () => {
+  const rows = [{ id: "b", name: "Board Room", status: "In Meeting", location_id: "L4" }, { id: "t", name: "Twelve", status: "Available", location_id: "L4" }];
+  const a: any = await findFreeRoom(fake(rows, { t: 12 }), { attendees: 8, near: "Board Room" });
+  assert.match(JSON.stringify(a), /Twelve/);
+  assert.doesNotMatch(a.summary, /No (other )?room is free/);
+});

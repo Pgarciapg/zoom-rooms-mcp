@@ -77,3 +77,18 @@ test("a room on page 2 that is offline is seen by the attention tool", async (t)
   assert.equal(a.total, 2);
   assert.deepEqual(a.rooms.map((r) => r.name), ["Z"]);
 });
+
+// BLOCKS SHIP from the 11/24 9:25 PM Codex review: a room's activation code must never reach a tool result.
+test("activation codes are dropped from every page of the room list", async (t) => {
+  const withCode = (ids: string[], next = "") => () => new Response(JSON.stringify({ next_page_token: next, rooms: ids.map((id) => ({ id, name: id, status: "Available", activation_code: "SECRET-123" })) }), { status: 200 });
+  serve(t, [withCode(["a"], "t1"), withCode(["b"])]);
+  const list = (await new HttpZoomRoomsClient(creds()).listRooms()) as any;
+  assert.deepEqual(list.rooms.map((r: any) => r.id), ["a", "b"]);
+  assert.doesNotMatch(JSON.stringify(list), /activation_code|SECRET-123/);
+});
+
+test("a room profile's activation code is dropped too", async (t) => {
+  serve(t, [() => new Response(JSON.stringify({ id: "a", activation_code: "SECRET-1", basic: { name: "A", activation_code: "SECRET-2" } }), { status: 200 })]);
+  const room = await new HttpZoomRoomsClient(creds()).getRoom("a");
+  assert.doesNotMatch(JSON.stringify(room), /SECRET/);
+});

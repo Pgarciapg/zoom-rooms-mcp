@@ -61,7 +61,8 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       last = await this.request(`/rooms?${query}`);
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
-      rooms.push(...(batch ?? []));
+      // A room's activation_code can sign a device into the account; it is never needed here, so it never leaves this client.
+      rooms.push(...(batch ?? []).map((r: unknown) => (r && typeof r === "object" && !Array.isArray(r) ? (({ activation_code: _code, ...rest }) => rest)(r as Record<string, unknown>) : r)));
       token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
       if (!token) return { ...last, rooms, page_count: page, next_page_token: "" };
       if (seen.has(token)) throw new ZoomApiError(502, `Zoom repeated a page token on page ${page} of the room list; stopped so rooms are not counted twice.`);
@@ -70,8 +71,12 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     return { ...last, rooms, page_count: MAX_ROOM_PAGES, next_page_token: token };
   }
 
-  getRoom(roomId: string) {
-    return this.request(`/rooms/${encodeURIComponent(roomId)}`);
+  async getRoom(roomId: string) {
+    const room: any = await this.request(`/rooms/${encodeURIComponent(roomId)}`);
+    // Same rule as the room list: the activation code never leaves this client.
+    if (room?.basic && typeof room.basic === "object") delete room.basic.activation_code;
+    if (room && typeof room === "object") delete room.activation_code;
+    return room;
   }
 
   getRoomDevices(roomId: string) {

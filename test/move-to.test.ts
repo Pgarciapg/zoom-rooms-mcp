@@ -29,7 +29,9 @@ const fake = (rooms: unknown[] | Error, opts: { detailLoc?: string | null; nextP
 });
 const run = (client: ZoomRoomsClient) => diagnoseRoom(client, "r1", NOW, undefined, undefined, { moveTo: true });
 
-test("names free, healthy rooms in the same place, and never busy, offline, unhealthy, unknown or other-floor rooms", async () => {
+// Changed 11/25: Zoom's documented room list has no health field, so a free room with none ("Room 406") is offered last,
+// marked, instead of dropped (the 11/24 Codex review rated dropping it HIGH).
+test("names free, healthy rooms in the same place, then free rooms with no health given, and never busy, offline, unhealthy or other-floor rooms", async () => {
   const d = await run(fake([
     broken,
     row("r2", "Room 402", "Available", "Healthy"),
@@ -40,9 +42,9 @@ test("names free, healthy rooms in the same place, and never busy, offline, unhe
     row("r7", "Room 406", "Available", ""),
     row("r8", "Room 501", "Available", "Healthy", "L5"),
   ]));
-  assert.deepEqual(d.moveTo, { rooms: [{ id: "r3", name: "Room 401" }, { id: "r2", name: "Room 402" }], more: 0, note: null });
+  assert.deepEqual(d.moveTo, { rooms: [{ id: "r3", name: "Room 401" }, { id: "r2", name: "Room 402" }, { id: "r7", name: "Room 406 (Zoom gives no health)" }], more: 0, note: null });
   assert.match(d.summary, /A meeting is running in it right now: fix after it ends, or move it to Room 401, free now in the same Zoom location\./);
-  assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Room 401 \(r3\), Room 402 \(r2\)\./);
+  assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Room 401 \(r3\), Room 402 \(r2\), Room 406 \(Zoom gives no health\) \(r7\)\./);
 });
 
 test("at most three are named; the rest are counted", async () => {
@@ -334,4 +336,11 @@ test("review: diagnose_room does not print a same-named free room's id twice", a
   const text = (await import("../src/diagnose.ts")).diagnosisText(d);
   assert.match(text, /Huddle \(Zoom room aaa\)/);
   assert.doesNotMatch(text, /\(Zoom room aaa\) \(aaa\)/);
+});
+
+// BLOCKS SHIP from the 11/24 9:25 PM Codex review: Zoom's documented room list has no `health` field, so requiring
+// "Healthy" there rejected every room on a live account. A free room with no health reported is still offered, marked.
+test("a free room with no health field in Zoom's list is still offered, marked as health not reported", () => {
+  const free = freeRoomsIn([{ id: "big", name: "Room 12", location_id: "L1", status: "Available" }, { id: "w", name: "Warn", location_id: "L1", status: "Available", health: "Warning" }], new Set(), new Set(["L1"]));
+  assert.deepEqual(free, [{ id: "big", name: "Room 12 (Zoom gives no health)" }]);
 });
