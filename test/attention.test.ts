@@ -81,3 +81,17 @@ test("over MCP: plain-English text, structured rooms, read-only", async () => {
   assert.equal(r.structuredContent.source, "demo");
   assert.equal(r.structuredContent.rooms.length, 3);
 });
+
+// Codex review of 8cbfc99 (HIGH): Zoom's documented room list has no health field.
+test("an Available room with no health field and an offline controller is read and listed", async () => {
+  const client: any = {
+    listRooms: async () => ({ rooms: [{ id: "b", name: "Board", status: "Available" }, { id: "q", name: "Quiet", status: "Available" }] }),
+    getRoom: async (id: string) => ({ id, basic: { name: id } }),
+    getRoomDevices: async (id: string) => ({ devices: [{ device_hostname: `${id}-ctl`, device_type: "Controller", status: id === "b" ? "Offline" : "Online" }] }),
+  };
+  const a = await roomsNeedingAttention(client);
+  assert.deepEqual(a.rooms.map((r) => r.name), ["Board"], a.summary);
+  assert.match(a.summary, /b-ctl \(Controller\): Offline/);
+  assert.equal(a.needAttention, 1);
+  assert.equal(a.allClear, false);
+});

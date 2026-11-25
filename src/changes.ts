@@ -25,6 +25,8 @@ export interface RoomDetailFacts {
   down: Record<string, string>;
   /** Every device listed, as "name (type)", sorted. Missing in readings saved before 2026-11-24. */
   seen?: string[];
+  /** False when Zoom's room profile had no issues list (its documented shape): devices were read, issues were not. */
+  issuesRead?: boolean;
 }
 export interface RoomSnapshot {
   list: RoomListFacts & { at: string };
@@ -52,7 +54,8 @@ const validRoom = (r: unknown): boolean =>
   isObj(r) && isObj(r.list) && isStr(r.list.name) && isStr(r.list.status) && isStr(r.list.health) && isTime(r.list.at) &&
   (r.detail === undefined || (isObj(r.detail) && isTime(r.detail.at) && Array.isArray(r.detail.issues) && r.detail.issues.every(isStr) &&
     isObj(r.detail.down) && Object.values(r.detail.down).every(isStr) &&
-    (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr)))));
+    (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr))) &&
+    (r.detail.issuesRead === undefined || typeof r.detail.issuesRead === "boolean")));
 export const isSnapshot = (x: unknown): x is Snapshot =>
   isObj(x) && x.version === 1 && isStr(x.account) && (x.fullListAt === null || isTime(x.fullListAt)) && isObj(x.rooms) && Object.values(x.rooms).every(validRoom);
 
@@ -135,12 +138,15 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
   if (!isObj(room)) throw new Error("the room detail came back in an unexpected shape");
   // No issues list, or an issue in a shape we cannot read, means the issues are unknown, never "none".
   const rawIssues = (room as any).issues;
-  if (!Array.isArray(rawIssues)) throw new Error(rawIssues == null ? "the room detail had no issues list" : "its open issues came back in an unexpected shape");
+  // Zoom's documented room profile has no issues list (Codex review, 11/25): the devices are still read and compared;
+  // the issues are marked unread, never "none".
+  if (rawIssues != null && !Array.isArray(rawIssues)) throw new Error("its open issues came back in an unexpected shape");
+  const issuesRead = Array.isArray(rawIssues);
   const rawDevices = isObj(devices) ? (devices as any).devices : Array.isArray(devices) ? devices : undefined;
   if (!Array.isArray(rawDevices)) throw new Error("its device list came back in an unexpected shape");
   // Kept as written; compared ignoring case and spacing.
   const byKey = new Map<string, string>();
-  for (const i of rawIssues) {
+  for (const i of issuesRead ? rawIssues : []) {
     const text = str(isObj(i) ? i.issue ?? i.message ?? i.description : i).replace(/\s+/g, " ");
     if (!text) throw new Error("an open issue came back in a shape that could not be read");
     if (!byKey.has(issueKey(text))) byKey.set(issueKey(text), text);
@@ -156,7 +162,7 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
     if (OK_DEVICE.test(status)) continue;
     down[name] = status || "unknown";
   }
-  return { issues, down, seen: [...seen].sort() };
+  return { issues, down, seen: [...seen].sort(), ...(issuesRead ? {} : { issuesRead: false }) };
 };
 
 /**
@@ -306,10 +312,13 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       continue;
     }
     detailWas = carryUnnamed(detailWas, detailNow);
-    const wasKeys = new Set(detailWas.issues.map(issueKey));
-    const nowKeys = new Set(detailNow.issues.map(issueKey));
-    for (const i of detailNow.issues) if (!wasKeys.has(issueKey(i))) add(now_.name, "worse", `New issue: ${i}.`);
-    for (const i of detailWas.issues) if (!nowKeys.has(issueKey(i))) add(now_.name, "better", `Issue closed: ${i}.`);
+    if (detailWas.issuesRead === false || detailNow.issuesRead === false) notCompared.push(`${now_.name}: open issues (Zoom's room profile gave no issues list${detailWas.issuesRead === false && detailNow.issuesRead !== false ? " last time" : ""}); its devices were compared`);
+    else {
+      const wasKeys = new Set(detailWas.issues.map(issueKey));
+      const nowKeys = new Set(detailNow.issues.map(issueKey));
+      for (const i of detailNow.issues) if (!wasKeys.has(issueKey(i))) add(now_.name, "worse", `New issue: ${i}.`);
+      for (const i of detailWas.issues) if (!nowKeys.has(issueKey(i))) add(now_.name, "better", `Issue closed: ${i}.`);
+    }
     for (const [d, s] of Object.entries(detailNow.down)) {
       const prev = detailWas.down[d];
       if (prev === undefined) add(now_.name, "worse", `${d}: ${s} (was online).`);

@@ -9,6 +9,9 @@ import { allocateMoveTo, besideRoom, cleanName, freeRoomsIn, lookUpFits, readCap
 import { ago } from "./ago.ts";
 import { deviceName } from "./device-fields.ts";
 
+/** A room computer that is up (same rule as diagnose.ts; kept here so the two modules do not import each other). */
+const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
+
 export type Level = "critical" | "warning";
 
 export interface RoomIssue {
@@ -112,7 +115,6 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   }
 
   const unknownHealth = rooms.filter((r) => !levelOf(r) && !/^healthy$/i.test(str(r.health)));
-  for (const r of unknownHealth) couldNotCheck.push(`${str(r.name) || str(r.id)}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
 
   const problems = rooms
     .map((r) => ({ r, level: levelOf(r) }))
@@ -120,8 +122,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     .sort((a, b) => (a.level === b.level ? Number(str(b.r.status).toLowerCase() === "offline") - Number(str(a.r.status).toLowerCase() === "offline") : a.level === "critical" ? -1 : 1));
 
   const places = new PlaceNamer(client);
-  const detailed = await Promise.all(
-    problems.slice(0, limit).map(async ({ r, level }): Promise<AttentionRoom> => {
+  const readOne = async ({ r, level }: { r: any; level: Level }): Promise<AttentionRoom> => {
       const id = str(r.id);
       const name = str(r.name) || id;
       let detail: any = null;
@@ -151,8 +152,22 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
         ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean)))
         : [];
       return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base, now), moveTo: candidates, moveToNote: null, moveToSize: null as RoomFit | null, seats: readCapacity(detail) };
-    }),
-  );
+  };
+  const detailed = await Promise.all(problems.slice(0, limit).map(readOne));
+  // Zoom's documented room list has no health field (Codex review, 11/25): an up room with none could still have a
+  // device down or an open issue, so it is read too, with whatever room is left under the limit.
+  const quiet = rooms.filter((r) => !levelOf(r) && !str(r.health) && UP_STATUS.test(str(r.status)) && str(r.id));
+  const spare = Math.max(0, limit - detailed.length);
+  for (const room of await Promise.all(quiet.slice(0, spare).map((r) => readOne({ r, level: "warning" })))) {
+    if (!room.devices.length && !room.issues.length) continue;
+    if (room.issues.some((i) => /^critical$/i.test(i.severity))) room.level = "critical";
+    const r = quiet.find((q) => str(q.id) === room.id)!;
+    problems.push({ r, level: room.level });
+    detailed.push(room);
+    unknownHealth.splice(unknownHealth.indexOf(r), 1);
+  }
+  if (quiet.length > spare) couldNotCheck.push(`${quiet.length - spare} more ${quiet.length - spare === 1 ? "room" : "rooms"} with no health from Zoom ${quiet.length - spare === 1 ? "was" : "were"} not read (past the limit of ${limit} rooms read per call).`);
+  for (const r of unknownHealth) couldNotCheck.push(`${str(r.name) || str(r.id)}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
   // Within a level: offline first, then the oldest open issue first.
   const firstSince = (room: AttentionRoom) => room.issues.map((i) => i.since ?? "~").sort()[0] ?? "~";
   detailed.sort((a, b) => (a.level === b.level ? Number(b.status.toLowerCase() === "offline") - Number(a.status.toLowerCase() === "offline") || firstSince(a).localeCompare(firstSince(b)) : a.level === "critical" ? -1 : 1));

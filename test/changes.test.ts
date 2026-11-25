@@ -216,7 +216,9 @@ test("review: an unreadable or missing issues list is unknown, never 'Issue clos
     const shaped: ZoomRoomsClient = { ...client, getRoom: async (id) => (variant === "odd-issue" ? { id, issues: [{ issue_name: "Microphone offline" }] } : { id }) };
     const r = await call(await connect(shaped, { snapshots: store, source: "zoom", account: "acct" }));
     assert.doesNotMatch(r.content[0]!.text, /Issue closed/, variant);
-    assert.match(r.content[0]!.text, /Room Two: issues and devices could not be read/, variant);
+    // Since 11/25 a profile with no issues list (Zoom's documented shape) still has its devices compared.
+    if (variant === "odd-issue") assert.match(r.content[0]!.text, /Room Two: issues and devices could not be read/, variant);
+    else assert.match(r.content[0]!.text, /Room Two: open issues \(Zoom's room profile gave no issues list\); its devices were compared/, variant);
   }
 });
 
@@ -334,5 +336,41 @@ test("overlapping what_changed calls run one after the other, so the newest read
   await new Promise((r) => setTimeout(r, 10));
   release();
   await Promise.all([first, second]);
+  assert.equal(store.load()!.rooms.r1!.list.status, "Offline");
+});
+
+// Codex review of 8cbfc99 (HIGH): Zoom's documented room profile has no issues list; devices must still be compared.
+test("a controller going offline is reported when the room profile has no issues list", async () => {
+  const { state, client } = fakeAccount();
+  const plain: ZoomRoomsClient = { ...client, getRoom: async (id) => ({ id, basic: { name: id } }) };
+  state.rooms = [{ id: "b", name: "Board", status: "Available" }];
+  state.devices = { b: [{ device_hostname: "Board-Ctl", device_type: "Controller", status: "Online" }] };
+  const store = new MemorySnapshotStore();
+  const c = await connect(plain, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.devices = { b: [{ device_hostname: "Board-Ctl", device_type: "Controller", status: "Offline" }] };
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /Board-Ctl \(Controller\): Offline \(was online\)/, text);
+});
+
+// Codex review of 8cbfc99 (HIGH): two server processes share one saved check.
+test("a check never overwrites a newer one another process saved while it was reading", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  const realList = client.listRooms.bind(client);
+  let other: any = null;
+  client.listRooms = async () => {
+    const out = await realList();
+    // Meanwhile another process saves a newer check.
+    other = structuredClone(store.load()!);
+    other.rooms.r1.list.status = "Offline";
+    store.save(other);
+    return out;
+  };
+  state.rooms[0] = { ...state.rooms[0], status: "Available" };
+  const r = await call(c);
+  assert.match(r.content[0]!.text, /could NOT be saved \(another check was saved while this one was reading Zoom/);
   assert.equal(store.load()!.rooms.r1!.list.status, "Offline");
 });
