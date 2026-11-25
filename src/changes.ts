@@ -30,6 +30,8 @@ export interface RoomDetailFacts {
   seen?: string[];
   /** False when Zoom's room profile had no issues list (its documented shape): devices were read, issues were not. */
   issuesRead?: boolean;
+  /** When the saved issues were last actually read, if earlier than `at` (kept because Zoom gave no issues list since). */
+  issuesAt?: string;
 }
 export interface RoomSnapshot {
   list: RoomListFacts & { at: string };
@@ -60,7 +62,8 @@ const validRoom = (r: unknown): boolean =>
   (r.detail === undefined || (isObj(r.detail) && isTime(r.detail.at) && Array.isArray(r.detail.issues) && r.detail.issues.every(isStr) &&
     isObj(r.detail.down) && Object.values(r.detail.down).every(isStr) &&
     (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr))) &&
-    (r.detail.issuesRead === undefined || typeof r.detail.issuesRead === "boolean")));
+    (r.detail.issuesRead === undefined || typeof r.detail.issuesRead === "boolean") &&
+    (r.detail.issuesAt === undefined || isTime(r.detail.issuesAt))));
 export const isSnapshot = (x: unknown): x is Snapshot =>
   isObj(x) && x.version === 1 && isStr(x.account) && (x.fullListAt === null || isTime(x.fullListAt)) && isObj(x.rooms) && Object.values(x.rooms).every(validRoom);
 
@@ -114,9 +117,17 @@ export class FileSnapshotStore implements SnapshotStore {
   exclusive<T>(fn: () => T): T {
     mkdirSync(dirname(this.where), { recursive: true, mode: 0o700 });
     const lock = `${this.where}.lock`;
-    let fd: number;
+    const mine = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const take = () => {
+      const fd = openSync(lock, "wx", 0o600);
+      try {
+        writeFileSync(fd, mine);
+      } finally {
+        closeSync(fd);
+      }
+    };
     try {
-      fd = openSync(lock, "wx", 0o600);
+      take();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       let stale = false;
@@ -126,14 +137,25 @@ export class FileSnapshotStore implements SnapshotStore {
         stale = true;
       }
       if (!stale) throw new Error("another check is being saved right now");
-      rmSync(lock, { force: true });
-      fd = openSync(lock, "wx", 0o600);
+      // Take over a stale lock by renaming it away (one process wins the rename), never by deleting it, so two
+      // processes can never both clear it and both hold the lock (Sonnet review, 11/25).
+      try {
+        renameSync(lock, `${lock}.stale-${mine}`);
+        rmSync(`${lock}.stale-${mine}`, { force: true });
+        take();
+      } catch {
+        throw new Error("another check is being saved right now");
+      }
     }
     try {
       return fn();
     } finally {
-      closeSync(fd);
-      rmSync(lock, { force: true });
+      // Remove the lock only if it is still ours (a slow save never removes the next holder's lock).
+      try {
+        if (readFileSync(lock, "utf8") === mine) rmSync(lock, { force: true });
+      } catch {
+        // already gone
+      }
     }
   }
   /** Moves an unreadable file aside (kept, not deleted) so a fresh starting point can be saved. */
@@ -400,10 +422,11 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
  * Issues not read this time (no issues list in Zoom's room profile) keep their last reading, so a later check that can
  * read them still sees an open camera issue close (Codex review, 11/25). Devices are always this reading's.
  */
-const keepIssues = (now_: RoomDetailFacts, before: RoomDetailFacts | undefined): RoomDetailFacts => {
+const keepIssues = (now_: RoomDetailFacts, before: (RoomDetailFacts & { at: string }) | undefined): RoomDetailFacts => {
   if (now_.issuesRead !== false || !before || before.issuesRead === false) return now_;
   const { issuesRead: _unread, ...rest } = now_;
-  return { ...rest, issues: [...before.issues] };
+  // The kept issues say when they were read, so a saved check never passes them off as fresh.
+  return { ...rest, issues: [...before.issues], issuesAt: before.issuesAt ?? before.at };
 };
 
 /** The next snapshot: this reading, with every part not read this time kept from the last one. */

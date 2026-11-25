@@ -384,6 +384,8 @@ test("an open issue survives a check whose profile has no issues list, and its c
   const plain: ZoomRoomsClient = { ...client, getRoom: async (id) => ({ id }) };
   await call(await connect(plain, { snapshots: store, source: "zoom", account: "acct" }));
   assert.deepEqual(store.load()!.rooms.r2!.detail!.issues, ["Microphone offline"]);
+  const kept = store.load()!.rooms.r2!.detail!;
+  assert.ok(kept.issuesAt && kept.issuesAt <= kept.at, JSON.stringify(kept));
   state.issues = { r2: [] };
   const text = (await call(c)).content[0]!.text;
   assert.match(text, /Issue closed: Microphone offline/, text);
@@ -399,5 +401,19 @@ test("the file store's save lock: a fresh lock blocks, a stale one is taken over
   const old = new Date(Date.now() - 60_000);
   utimesSync(`${dir}/state.json.lock`, old, old);
   assert.equal(store.exclusive(() => 2), 2);
+  assert.equal(exists(`${dir}/state.json.lock`), false);
+});
+
+test("review: a lock is removed only by its holder, and a stale one is taken over by rename", async () => {
+  const { mkdtempSync, writeFileSync: write, utimesSync, readFileSync: read, existsSync: exists } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/zoom-lock2-`);
+  const store = new FileSnapshotStore(`${dir}/state.json`);
+  // Inside the first holder's run, another process takes the lock over (as if this save ran past the stale age).
+  store.exclusive(() => write(`${dir}/state.json.lock`, "someone-else"));
+  assert.equal(read(`${dir}/state.json.lock`, "utf8"), "someone-else");
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(`${dir}/state.json.lock`, old, old);
+  assert.equal(store.exclusive(() => 3), 3);
   assert.equal(exists(`${dir}/state.json.lock`), false);
 });

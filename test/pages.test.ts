@@ -109,3 +109,15 @@ test("every Zoom call carries a timeout, and a timeout reads as a clear Zoom err
   assert.equal(signals.length, 2);
   assert.ok(signals.every((s) => s instanceof AbortSignal));
 });
+
+test("review: a stall while reading the body also reads as a clear Zoom error", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = (async (input: string | URL) => {
+    if (String(input).endsWith("/oauth/token")) return new Response(JSON.stringify({ access_token: "t", token_type: "bearer", expires_in: 3600 }), { status: 200 });
+    return { ok: true, status: 200, json: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } } as unknown as Response;
+  }) as typeof fetch;
+  await assert.rejects(new HttpZoomRoomsClient(creds()).getRoom("b"), /Zoom did not answer \/rooms\/b within 30 s/);
+});

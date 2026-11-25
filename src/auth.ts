@@ -1,6 +1,9 @@
 
 /** How long any one Zoom call may take before it fails with a clear error. */
 export const ZOOM_TIMEOUT_MS = 30_000;
+
+/** An aborted or timed-out fetch, at any point (headers or body). */
+export const isTimeout = (error: unknown) => error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 export interface ZoomCredentials {
   accountId: string;
   clientId: string;
