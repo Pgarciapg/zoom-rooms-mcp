@@ -64,6 +64,7 @@ export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagn
 
 export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now }: ServerOptions): McpServer => {
   let store: SnapshotStore | null = snapshots ?? null;
+  let changesQueue: Promise<unknown> = Promise.resolve();
   const accountKey = source === "demo" ? "demo" : account;
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   const note = source === "demo" ? " (demo data: a fictional campus, not a real Zoom account)" : "";
@@ -101,7 +102,19 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: { save: z.boolean().optional().describe("Save this check as the new starting point (default true). Set false to compare without moving it.") },
       annotations: SAVES_LOCALLY,
     },
-    async ({ save = true }: { save?: boolean }) => {
+    // One what_changed at a time (Codex review, 11/25): a slow older call finishing last would otherwise overwrite the
+    // newer saved check. Each call waits for the one before it, then reads and saves on its own.
+    ({ save = true }: { save?: boolean }) => {
+      const run = changesQueue.then(() => whatChanged(save));
+      changesQueue = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
+    },
+  );
+
+  async function whatChanged(save: boolean) {
       try {
         const t = now();
         if (!accountKey) throw new Error("what_changed needs the Zoom account to keep its checks apart; start the server with credentials or --demo.");
@@ -131,8 +144,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       } catch (error) {
         return fail(error);
       }
-    },
-  );
+  }
 
   server.registerTool(
     "diagnose_rooms",

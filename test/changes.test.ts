@@ -293,3 +293,46 @@ test("an offline device that is gone from the device list is not 'back online'",
   state.devices.r2 = [{ name: "Ceiling Mic", device_type: "Microphone", status: "Online" }];
   assert.match((await call(c)).content[0]!.text, /\[better\] Ceiling Mic \(Microphone\): back online \(was Offline\)\./);
 });
+
+// Sonnet review of 9296d6e: a check saved before device_hostname was read keyed the device "Unnamed device (Type)".
+test("a check saved under the old unnamed key does not report the same down device as newly offline", async () => {
+  const { state, client } = fakeAccount();
+  state.devices = { r2: [{ device_hostname: "Lobby-PC", device_type: "Panel", status: "Offline" }] };
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  const old = store.load()!;
+  const d = old.rooms.r2!.detail!;
+  d.down = { "Unnamed device (Panel)": "Offline" };
+  d.seen = ["Unnamed device (Panel)"];
+  store.save(old);
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /was online|no longer in the room's device list/, text);
+});
+
+// Codex review of b4974a8 (HIGH): two overlapping what_changed calls; the slow older one must not overwrite the newer save.
+test("overlapping what_changed calls run one after the other, so the newest reading is the one saved", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let slow = true;
+  const realList = client.listRooms.bind(client);
+  client.listRooms = async () => {
+    const snap = structuredClone(await realList());
+    if (slow) {
+      slow = false;
+      await gate;
+    }
+    return snap;
+  };
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  const first = call(c); // reads Room One Available, then waits
+  await new Promise((r) => setTimeout(r, 10));
+  state.rooms = [{ id: "r1", name: "Room One", status: "Offline", health: "Critical" }, state.rooms[1]];
+  const second = call(c);
+  await new Promise((r) => setTimeout(r, 10));
+  release();
+  await Promise.all([first, second]);
+  assert.equal(store.load()!.rooms.r1!.list.status, "Offline");
+});

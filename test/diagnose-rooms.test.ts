@@ -226,3 +226,13 @@ test("documented device rows (device_hostname, device_firmware) still form a sam
   assert.ok(p, JSON.stringify(r.patterns));
   assert.match(p!.title, /Logitech Rally \(Camera\) failing in 2 rooms, all on firmware 1\.4\.3/);
 });
+
+// Codex review of b4974a8 (HIGH): Zoom's documented room list has no health field.
+test("an Available room with no health field whose controller is Offline is diagnosed, not skipped", async () => {
+  const rows = [{ id: "br", name: "Boardroom", status: "Available" }, { id: "q", name: "Quiet", status: "Available" }];
+  const devs = { br: [{ name: "Zoom Rooms Controller", device_type: "Controller", status: "Offline" }], q: ok };
+  const d = await diagnoseRooms(account(rows, { br: detail("br"), q: detail("q") }, devs), NOW);
+  assert.equal(d.needAttention, 1, d.summary);
+  assert.match(d.summary, /\(id br\): warning, 1 finding; first: Zoom Rooms Controller \(Controller\): Offline/);
+  assert.doesNotMatch(d.summary, /\(id q\)/);
+});

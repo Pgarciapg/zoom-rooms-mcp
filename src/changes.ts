@@ -159,6 +159,32 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
   return { issues, down, seen: [...seen].sort() };
 };
 
+/**
+ * Checks saved before 11/25 keyed a device Zoom names only by `device_hostname` as "Unnamed device (Type)". When the
+ * room now has exactly one device of that type under a name the old check never saw, it is the same device, so the old
+ * entry is read under the new name (never a false "was online" plus "no longer listed" pair after the upgrade).
+ */
+const carryUnnamed = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts): T => {
+  const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
+  const nowKeys = [...new Set([...Object.keys(now_.down), ...(now_.seen ?? [])])];
+  const down = { ...was.down };
+  let seen = was.seen ? [...was.seen] : was.seen;
+  let changed = false;
+  for (const old of oldKeys) {
+    const m = /^Unnamed device (\(.*\))$/.exec(old);
+    if (!m || nowKeys.includes(old)) continue;
+    const fresh = nowKeys.filter((k) => k.endsWith(` ${m[1]}`) && !oldKeys.has(k));
+    if (fresh.length !== 1) continue;
+    changed = true;
+    if (old in down) {
+      down[fresh[0]!] = down[old]!;
+      delete down[old];
+    }
+    if (seen) seen = seen.map((k) => (k === old ? fresh[0]! : k));
+  }
+  return changed ? { ...was, down, ...(seen ? { seen } : {}) } : was;
+};
+
 /** Reads the room list, then the detail of every room that looks unhappy now or did last time (up to DETAIL_LIMIT). */
 export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null): Promise<Reading> => {
   const couldNotCheck: string[] = [];
@@ -264,7 +290,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     else if ((hw === undefined) !== (hn === undefined) || (hw === undefined && was.health !== now_.health)) add(now_.name, "changed", `Health now reads "${now_.health}" (was "${was.health}").`);
 
     const detailNow = reading.details.get(id);
-    const detailWas = before.detail;
+    let detailWas = before.detail;
     if (!detailNow) {
       // Not read this time. Only a problem if it had something open last time, or looks unhappy now.
       const hadOpen = detailWas && (detailWas.issues.length || Object.keys(detailWas.down).length);
@@ -279,6 +305,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       } else if (detailNow.issues.length || Object.keys(detailNow.down).length) notCompared.push(`${now_.name}: its issues and devices were not read last time, so this is their first reading`);
       continue;
     }
+    detailWas = carryUnnamed(detailWas, detailNow);
     const wasKeys = new Set(detailWas.issues.map(issueKey));
     const nowKeys = new Set(detailNow.issues.map(issueKey));
     for (const i of detailNow.issues) if (!wasKeys.has(issueKey(i))) add(now_.name, "worse", `New issue: ${i}.`);

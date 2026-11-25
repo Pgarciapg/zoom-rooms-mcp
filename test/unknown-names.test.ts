@@ -12,8 +12,10 @@ const unknown = (id: string, name: string, health = "") => ({ id, name, status: 
 const healthy = (id: string, name: string) => ({ id, name, status: "Available", health: "Healthy" });
 const client = (rows: any[]): ZoomRoomsClient => ({
   listRooms: async () => ({ rooms: rows }),
-  getRoom: async (id) => ({ id, name: rows.find((r) => r.id === id)?.name, issues: [{ issue: "Display disconnected", severity: "warning" }] }),
-  getRoomDevices: async () => ({ devices: [] }),
+  // Only the Warning rooms have an open issue: since 11/25 diagnose_rooms also reads up rooms with no health, and a
+  // quiet one (no issue, its devices online) stays unclassed, which is what these naming tests look at.
+  getRoom: async (id) => ({ id, name: rows.find((r) => r.id === id)?.name, issues: rows.find((r) => r.id === id)?.health === "Warning" ? [{ issue: "Display disconnected", severity: "warning" }] : [] }),
+  getRoomDevices: async () => ({ devices: [{ name: "Controller", device_type: "Controller", status: "Online" }] }),
 });
 const lines = (d: { couldNotCheck: string[] }) => d.couldNotCheck.join(" | ");
 

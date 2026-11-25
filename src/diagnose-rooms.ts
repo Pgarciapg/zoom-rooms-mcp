@@ -232,7 +232,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   });
 
   // Rooms that are not problems but whose health or status could not be classed: they are named in the answer too.
-  const unclassed = rooms.filter((r) => !levelOf(r) && (!/^healthy$/i.test(str(r.health)) || !UP_STATUS.test(str(r.status))));
+  let unclassed = rooms.filter((r) => !levelOf(r) && (!/^healthy$/i.test(str(r.health)) || !UP_STATUS.test(str(r.status))));
   // Offline first, then critical, then warning: the same order as get_rooms_needing_attention.
   const problems = rooms
     .map((r) => ({ r, level: levelOf(r) }))
@@ -242,6 +242,17 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   // One location-list read shared by every room in this call.
   const places = new PlaceNamer(client);
   const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r, places)));
+  // Zoom's documented room list has no health field (Codex review, 11/25): an up room with none could still have a
+  // device down, so it is read too, with whatever room is left under the limit. One with a finding is a problem room.
+  const quiet = rooms.filter((r) => !levelOf(r) && !str(r.health) && UP_STATUS.test(str(r.status)) && (str(r.id) || str(r.room_id)));
+  const spare = Math.max(0, limit - diagnoses.length);
+  const probed = await Promise.all(quiet.slice(0, spare).map((r) => diagnoseRoom(client, str(r.id) || str(r.room_id), now, r, places).then((d) => ({ r, d }))));
+  for (const { r, d } of probed) {
+    if (!d.findings.length) continue;
+    problems.push({ r, level: d.findings.some((f) => f.level === "critical") ? "critical" : "warning" });
+    diagnoses.push(d);
+    unclassed = unclassed.filter((u) => u !== r);
+  }
   const placeNote = places.note();
   // A name two rooms named in this answer share (problem rooms and unclassed rooms) carries Zoom's room id, the same
   // label the other tools use for problem rooms. Healthy rooms are never named, so a healthy twin adds nothing.
