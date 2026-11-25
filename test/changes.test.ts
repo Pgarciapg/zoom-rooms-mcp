@@ -275,3 +275,21 @@ test("review: 'since the last check' is the latest reading; rooms kept from an o
   assert.match(r.structuredContent.summary, /since the last check \(2 hours ago\)/);
   assert.match(r.content[0]!.text, /1 room was compared with an older reading, from 3 days ago/);
 });
+
+// From the ship pipeline's Codex review (2026-11-24): an offline device that disappears from Zoom's device list was
+// reported "back online", though recovery was never seen.
+test("an offline device that is gone from the device list is not 'back online'", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [{ name: "Controller", device_type: "Controller", status: "Online" }];
+  const r = await call(c);
+  const text = r.content[0]!.text;
+  assert.doesNotMatch(text, /Ceiling Mic \(Microphone\): back online/);
+  assert.match(text, /\[changed\] Ceiling Mic \(Microphone\): no longer in the room's device list \(was Offline\); not counted as back online\./);
+  // Still listed and online now: back online, as before.
+  state.devices.r2 = [{ name: "Ceiling Mic", device_type: "Microphone", status: "Offline" }];
+  await call(c);
+  state.devices.r2 = [{ name: "Ceiling Mic", device_type: "Microphone", status: "Online" }];
+  assert.match((await call(c)).content[0]!.text, /\[better\] Ceiling Mic \(Microphone\): back online \(was Offline\)\./);
+});

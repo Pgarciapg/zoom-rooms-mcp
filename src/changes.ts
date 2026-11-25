@@ -22,6 +22,8 @@ export interface RoomDetailFacts {
   issues: string[];
   /** Devices not online, as "name (type)" -> status. */
   down: Record<string, string>;
+  /** Every device listed, as "name (type)", sorted. Missing in readings saved before 2026-11-24. */
+  seen?: string[];
 }
 export interface RoomSnapshot {
   list: RoomListFacts & { at: string };
@@ -48,7 +50,8 @@ const isTime = (v: unknown) => isStr(v) && !Number.isNaN(Date.parse(v));
 const validRoom = (r: unknown): boolean =>
   isObj(r) && isObj(r.list) && isStr(r.list.name) && isStr(r.list.status) && isStr(r.list.health) && isTime(r.list.at) &&
   (r.detail === undefined || (isObj(r.detail) && isTime(r.detail.at) && Array.isArray(r.detail.issues) && r.detail.issues.every(isStr) &&
-    isObj(r.detail.down) && Object.values(r.detail.down).every(isStr)));
+    isObj(r.detail.down) && Object.values(r.detail.down).every(isStr) &&
+    (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr)))));
 export const isSnapshot = (x: unknown): x is Snapshot =>
   isObj(x) && x.version === 1 && isStr(x.account) && (x.fullListAt === null || isTime(x.fullListAt)) && isObj(x.rooms) && Object.values(x.rooms).every(validRoom);
 
@@ -143,14 +146,16 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
   }
   const issues = [...byKey.values()].sort();
   const down: Record<string, string> = {};
+  const seen = new Set<string>();
   for (const d of rawDevices) {
     if (!isObj(d)) throw new Error("a device came back in a shape that could not be read");
     const status = str(d.status);
-    if (OK_DEVICE.test(status)) continue;
     const name = `${str(d.name) || "Unnamed device"} (${str(d.device_type) || "device"})`;
+    seen.add(name);
+    if (OK_DEVICE.test(status)) continue;
     down[name] = status || "unknown";
   }
-  return { issues, down };
+  return { issues, down, seen: [...seen].sort() };
 };
 
 /** Reads the room list, then the detail of every room that looks unhappy now or did last time (up to DETAIL_LIMIT). */
@@ -282,7 +287,12 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       if (prev === undefined) add(now_.name, "worse", `${d}: ${s} (was online).`);
       else if (prev.toLowerCase() !== s.toLowerCase()) add(now_.name, "changed", `${d}: now ${s} (was ${prev}).`);
     }
-    for (const [d, s] of Object.entries(detailWas.down)) if (!(d in detailNow.down)) add(now_.name, "better", `${d}: back online (was ${s}).`);
+    // Back online only when the device is still listed; one that is gone from the list was never seen recover.
+    for (const [d, s] of Object.entries(detailWas.down)) {
+      if (d in detailNow.down) continue;
+      if (detailNow.seen && !detailNow.seen.includes(d)) add(now_.name, "changed", `${d}: no longer in the room's device list (was ${s}); not counted as back online.`);
+      else add(now_.name, "better", `${d}: back online (was ${s}).`);
+    }
   }
   for (const [id, before] of Object.entries(previous.rooms)) {
     if (reading.rooms.has(id)) continue;
