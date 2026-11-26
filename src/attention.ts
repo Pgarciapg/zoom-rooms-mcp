@@ -111,7 +111,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   try {
     const list = await client.listRooms();
     rooms = roomsOf(list);
-    if (typeof (list as any)?.next_page_token === "string" && (list as any).next_page_token) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
+    if (str((list as any)?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };
@@ -148,7 +148,14 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const code = str(detail?.location_id) || str(r.location_id);
       const where = fromDetail || (code ? await places.name(code) : null);
       readOk.set(id, {
-        clean: !!detail && typeof detail === "object" && devices.length > 0 && (detail.issues == null || Array.isArray(detail.issues)),
+        // The profile's own status and health count too (Sonnet review, 11/26): a list row can lag behind it.
+        clean:
+          !!detail &&
+          typeof detail === "object" &&
+          devices.length > 0 &&
+          (detail.issues == null || Array.isArray(detail.issues)) &&
+          (!str(detail.status) || UP_STATUS.test(str(detail.status))) &&
+          (!str(detail.health) || /^healthy$/i.test(str(detail.health))),
         noAlerts: !!detail && typeof detail === "object" && !("issues" in detail),
       });
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null, age: i.since ? ago(str(i.since), now) : null }));
@@ -202,7 +209,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   const hidden = problems.length - detailed.length;
   const notReadInDetail = problems.slice(limit).map((p) => str(p.r.name) || str(p.r.id));
   const allClear = problems.length === 0 && couldNotCheck.length === 0;
-  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread > 0 && couldNotCheck.length === 1;
+  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread > 0 && couldNotCheck.length === 1 && rooms.every((r) => UP_STATUS.test(str(r.status)));
   const lines: string[] = [];
   if (allClear) lines.push(`All ${rooms.length} rooms are healthy and none is offline.`);
   else if (devicesClear) lines.push(devicesClearLine(rooms.length, alertsUnread));

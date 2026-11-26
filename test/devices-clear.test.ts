@@ -56,3 +56,27 @@ for (const [tool, run] of [
     assert.equal(d.devicesClear, false);
   });
 }
+
+// Sonnet review of 3844477 (11/26).
+test("review: diagnose_rooms keeps the worse of two rows with one id, so a duplicate never gives devicesClear", async () => {
+  const c = live(2, { listRooms: async () => ({ rooms: [{ id: "r0", name: "Room 0", status: "Available" }, { id: "r0", name: "Room 0", status: "Offline" }, { id: "r1", name: "Room 1", status: "Available" }], next_page_token: "" }) });
+  const d = await diagnoseRooms(c, NOW);
+  assert.equal(d.devicesClear, false);
+  assert.equal(d.needAttention, 1, d.summary);
+  assert.match(d.couldNotCheck.join(" | "), /room id r0 appeared twice/);
+});
+
+test("review: attention never calls devices clear when a room's own profile says it is offline", async () => {
+  const d = await roomsNeedingAttention(live(2, { getRoom: async (id) => ({ id, basic: { name: id }, ...(id === "r1" ? { status: "Offline" } : {}) }) }), 15, NOW);
+  assert.equal(d.devicesClear, false, d.summary);
+});
+
+test("review: a numeric next_page_token still marks the list partial in attention", async () => {
+  const d = await roomsNeedingAttention(live(2, { listRooms: async () => ({ rooms: [{ id: "r0", name: "Room 0", status: "Available" }], next_page_token: 7 as any }) }), 15, NOW);
+  assert.equal(d.devicesClear, false);
+});
+
+test("review: a Healthy-listed room with an odd status keeps devicesClear false", async () => {
+  const c = live(2, { listRooms: async () => ({ rooms: [{ id: "r0", name: "Room 0", status: "Available" }, { id: "r1", name: "Room 1", status: "Unknown", health: "Healthy" }], next_page_token: "" }) });
+  for (const d of [await roomsNeedingAttention(c, 15, NOW), await diagnoseRooms(c, NOW)]) assert.equal(d.devicesClear, false, d.summary);
+});

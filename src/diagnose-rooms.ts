@@ -227,15 +227,27 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };
   }
 
-  // A room listed twice is one room.
-  const seen = new Set<string>();
-  rooms = rooms.filter((r) => {
+  // A room listed twice is one room, kept by its worse row and named, so a duplicate never hides a problem behind
+  // a reassuring answer (Sonnet review, 11/26).
+  const rank = (r: any) => (levelOf(r) === "critical" ? 2 : levelOf(r) === "warning" ? 1 : 0);
+  const kept = new Map<string, number>();
+  const deduped: any[] = [];
+  for (const r of rooms) {
     const id = str(r.id) || str(r.room_id);
-    if (!id) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
+    if (!id) {
+      deduped.push(r);
+      continue;
+    }
+    const at = kept.get(id);
+    if (at === undefined) {
+      kept.set(id, deduped.length);
+      deduped.push(r);
+      continue;
+    }
+    couldNotCheck.push(`Room list: room id ${cleanName(id)} appeared twice; its worse row was kept.`);
+    if (rank(r) > rank(deduped[at])) deduped[at] = r;
+  }
+  rooms = deduped;
 
   // Rooms that are not problems but whose health or status could not be classed: they are named in the answer too.
   let unclassed = rooms.filter((r) => !levelOf(r) && (!/^healthy$/i.test(str(r.health)) || !UP_STATUS.test(str(r.status))));
@@ -326,7 +338,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const caveat = unseen ? ` ${plural(unseen, "problem room")} could not be included (${[notDiagnosed.length ? `${notDiagnosed.length} past the limit` : "", unread ? `${unread} could not be read` : ""].filter(Boolean).join(", ")}), so a shared cause involving ${unseen === 1 ? "it" : "them"} would not show here.` : "";
 
   const allClear = rooms.length > 0 && problems.length === 0 && couldNotCheck.length === 0;
-  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread.length > 0 && couldNotCheck.length === 1;
+  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread.length > 0 && couldNotCheck.length === 1 && rooms.every((r) => UP_STATUS.test(str(r.status)));
   const lines: string[] = [];
   if (rooms.length === 0) lines.push(`The account has no rooms to diagnose${couldNotCheck.length ? " that could be read" : ""}. This is not an all-clear: there is nothing to check.`);
   else if (allClear) lines.push(rooms.length === 1 ? "The 1 room is healthy and not offline." : `All ${rooms.length} rooms are healthy and none is offline.`);
