@@ -47,7 +47,7 @@ const inTime =
     const late = new Promise<"late">((resolve) => {
       timer = setTimeout(() => resolve("late"), ms);
     });
-    const work = run(args, () => cut, startedAt);
+    const work = Promise.resolve().then(() => run(args, () => cut, startedAt));
     work.catch(() => undefined);
     try {
       const got = await Promise.race([work, late]);
@@ -142,7 +142,8 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     // newer saved check. Each call waits for the one before it, then reads and saves on its own.
     // The wait behind an earlier call counts against this call's own budget (Codex review, 11/25).
     inTime(budget, ({ save = true }: { save?: boolean }, late, startedAt) => {
-      const run = changesQueue.then(() => whatChanged(save, late, startedAt + Math.min(DETAIL_BUDGET_MS, budget * 0.8)));
+      // A call already answered "too slow" while it waited never reads Zoom, so retries never pile up (Sonnet review, 11/26).
+      const run = changesQueue.then(() => (late() ? tooSlow(budget) : whatChanged(save, late, startedAt + Math.min(DETAIL_BUDGET_MS, budget * 0.8))));
       changesQueue = run.then(
         () => undefined,
         () => undefined,

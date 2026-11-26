@@ -37,12 +37,14 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
 
   private async request(path: string, timeoutMs = ZOOM_TIMEOUT_MS): Promise<unknown> {
     // The timeout covers the token, the headers and the body alike: any stall reads as one clear Zoom error.
+    // One limit for the token and the call together, so a deadline is never overrun by the token fetch.
+    const until = Date.now() + timeoutMs;
     try {
-      const token = await getAccessToken(this.creds);
+      const token = await getAccessToken(this.creds, timeoutMs);
       const res = await fetch(`${this.baseUrl}${path}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         // A stalled Zoom never holds a tool (or the what_changed queue) forever (Codex review, 11/25).
-        signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
+        signal: AbortSignal.timeout(Math.max(1, until - Date.now())),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -78,7 +80,11 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
           if (error instanceof ZoomApiError && error.status === 504 && Date.now() >= opts.deadline - 50) return { ...last, rooms, page_count: page - 1, next_page_token: token };
           throw error;
         }
-      } else last = await this.request(`/rooms?${query}`);
+      } else {
+        // The first page has no partial answer to fall back to, but it still never runs past the deadline.
+        const left = opts.deadline === undefined ? ZOOM_TIMEOUT_MS : Math.min(ZOOM_TIMEOUT_MS, opts.deadline - Date.now());
+        last = await this.request(`/rooms?${query}`, Math.max(1, left));
+      }
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
       // A room's activation_code can sign a device into the account; it is never needed here, so it never leaves this client.

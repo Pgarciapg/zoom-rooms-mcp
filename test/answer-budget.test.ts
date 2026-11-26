@@ -137,3 +137,27 @@ test("review: diagnose_room reads the room profile and its devices at the same t
   // Serial reads take at least 600 ms (plus the list lookup); parallel ones about 300 ms.
   assert.ok(took < 550, `took ${took} ms; profile and device reads ran one after the other`);
 });
+
+test("review: a queued what_changed that was already cut off never reads Zoom, so retries do not pile up", async () => {
+  let lists = 0;
+  const base = slowDetails(10, 500);
+  const client: ZoomRoomsClient = { ...base, listRooms: async () => (lists++, base.listRooms()) };
+  const c = await connect(client, 200);
+  const rs = (await Promise.all([0, 1, 2].map(() => c.callTool({ name: "what_changed", arguments: {} })))) as Result[];
+  for (const r of rs) assert.match(r.content[0]!.text, /too slow to answer within/);
+  await wait(700);
+  assert.equal(lists, 1, `the room list was read ${lists} times for calls that had already answered`);
+});
+
+test("review: the first room-list page and the token never run past the reading's deadline", async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = slowPagesFetch(800, 1);
+  try {
+    const client = new HttpZoomRoomsClient({ accountId: "a-first", clientId: "c", clientSecret: "s" });
+    const t0 = Date.now();
+    await assert.rejects(readAccount(client, null, { budgetMs: 300 }), /did not answer/);
+    assert.ok(Date.now() - t0 < 600, `took ${Date.now() - t0} ms`);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

@@ -24,7 +24,7 @@ const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 const cacheKey = (creds: ZoomCredentials) => `${creds.accountId}\u0000${creds.clientId}\u0000${creds.clientSecret}`;
 
 /** Server-to-Server OAuth token for one Zoom account, cached until 100s before it expires. */
-export async function getAccessToken(creds: ZoomCredentials): Promise<string> {
+export async function getAccessToken(creds: ZoomCredentials, timeoutMs = ZOOM_TIMEOUT_MS): Promise<string> {
   const now = Date.now();
   const key = cacheKey(creds);
   const hit = tokenCache.get(key);
@@ -38,7 +38,7 @@ export async function getAccessToken(creds: ZoomCredentials): Promise<string> {
     },
     body: `grant_type=account_credentials&account_id=${encodeURIComponent(creds.accountId)}`,
     // A stalled Zoom never holds a tool (or the what_changed queue) forever (Codex review, 11/25).
-    signal: AbortSignal.timeout(ZOOM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(Math.max(1, Math.min(ZOOM_TIMEOUT_MS, timeoutMs))),
   });
 
   if (!res.ok) {
