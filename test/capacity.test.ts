@@ -171,7 +171,7 @@ test("review: rooms too small for the meeting are never listed under Free now", 
   const d = await run(fake([broken, free("r2", "Huddle A"), free("r3", "Huddle B")], { r2: 4, r3: 6 }), 10);
   const text = diagnosisText(d);
   assert.doesNotMatch(text, /Free now in the same Zoom location, healthy and not in a meeting: .*Huddle/);
-  assert.match(text, /No free room in the same Zoom location that was compared seats 10\./);
+  assert.match(text, /None of the free rooms in the same Zoom location whose size was read seats 10\./);
   assert.match(text, /Free but too small for 10: Huddle A \(r2\), 4 seats; Huddle B \(r3\), 6 seats\./);
 });
 
@@ -186,4 +186,15 @@ test("review: without a meeting size every free room stays under Free now", asyn
   const d = await run(fake([broken, free("r2", "Huddle A")], { r2: 4 }));
   assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Huddle A \(r2\)\./);
   assert.doesNotMatch(diagnosisText(d), /too small/);
+});
+
+test("review: a room not in a meeting never names a too-small room as free in its summary", async () => {
+  const idle = { ...broken, status: "Available" };
+  const c = { ...fake([idle, free("r2", "Big"), free("r3", "Tiny")], { r2: 12, r3: 4 }), getRoom: async (id: string) => (id === "r1" ? { ...BROKEN_DETAIL, status: "Available" } : { id, basic: { name: id, capacity: id === "r2" ? 12 : 4 } }) };
+  const d = await run(c, 10);
+  assert.match(d.summary, /Free now in the same Zoom location: Big\./);
+  assert.doesNotMatch(d.summary, /Tiny/);
+  const allSmall = await run({ ...c, getRoom: async (id: string) => (id === "r1" ? { ...BROKEN_DETAIL, status: "Available" } : { id, basic: { name: id, capacity: 4 } }) }, 10);
+  assert.match(allSmall.summary, /None of the free rooms in the same Zoom location whose size was read seats 10\./);
+  assert.doesNotMatch(allSmall.summary, /Free now/);
 });

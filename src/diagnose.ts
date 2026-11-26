@@ -108,6 +108,10 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const GENERIC_DEVICE_CHECK = "Check the device's power and cable, then look at it in the Zoom admin portal.";
 const GENERIC_ISSUE_CHECK = "Open the room in the Zoom admin portal and read its full alert.";
 
+/** Said when no free room nearby whose size was read seats the meeting. */
+const noneSeat = (attendees: number, more: number) =>
+  `None of the free rooms in the same Zoom location whose size was read seats ${attendees}${more ? ` (${more} more free ${more === 1 ? "room was" : "rooms were"} not shown)` : ""}`;
+
 /** Pass `listed` (the room's row from listRooms) when you already have it, so the room list is not read again. */
 export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now = Date.now(), listedRow?: unknown, places = new PlaceNamer(client), opts: { moveTo?: boolean; attendees?: number } = {}): Promise<RoomDiagnosis> => {
   const couldNotCheck: string[] = [];
@@ -347,8 +351,15 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   }
   const freeNames = moveTo?.rooms.length ? `${moveTo.rooms.map((r) => r.name).join(", ")}${moveTo.more ? ` (+${moveTo.more} more)` : ""}` : "";
   // The summary always says what the look found: rooms, none, or that it could not look.
+  // With a meeting size, rooms known to be too small are never named as free to go to, here or in diagnosisText
+  // (Sonnet review, 11/26).
+  const tooSmall = new Set(attendees != null && roomSizes ? roomSizes.rooms.filter((f) => f.fit === "too_small").map((f) => f.id) : []);
+  const fitNames = moveTo?.rooms.filter((r) => !tooSmall.has(r.id)).map((r) => r.name) ?? [];
+  const freeHere = fitNames.length
+    ? ` Free now in the same Zoom location: ${fitNames.join(", ")}${moveTo?.more ? ` (+${moveTo.more} more)` : ""}.`
+    : ` ${noneSeat(attendees!, moveTo?.more ?? 0)}.`;
   const lookLine = !moveTo ? "" : freeNames
-    ? (room.inMeeting ? "" : ` Free now in the same Zoom location: ${freeNames}.`) + (moveTo.note ? ` ${moveTo.note}` : "")
+    ? (room.inMeeting ? "" : freeHere) + (moveTo.note ? ` ${moveTo.note}` : "")
     : moveTo.note && /^(Could not|Zoom gives no|This room's location)/.test(moveTo.note) ? " Could not look for a free room nearby." : ` No other room in the same Zoom location is free and healthy right now.${moveTo.note ? ` ${moveTo.note}` : ""}`;
   const head = `${room.name}${room.where ? ` (${room.where})` : ""}`;
   // The first suggestion's size, only when there is something to say (a known capacity, or a meeting size to compare).
@@ -396,7 +407,7 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
     const n = d.roomSizes?.attendees;
     if (m.rooms.length && small.length) {
       if (usable.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${usable.map(label).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
-      else lines.push("", `No free room in the same Zoom location that was compared seats ${n}${m.more ? ` (${m.more} more free ${m.more === 1 ? "room was" : "rooms were"} not shown)` : ""}.${m.note ? ` ${m.note}` : ""}`);
+      else lines.push("", `${noneSeat(n!, m.more)}.${m.note ? ` ${m.note}` : ""}`);
       lines.push(`Free but too small for ${n}: ${small.map((r) => `${label(r)}, ${sizeOf.get(r.id)!.capacity} seats`).join("; ")}.`);
     } else if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map(label).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
     else lines.push("", m.note && /^(Could not|Zoom gives no|This room's location)/.test(m.note) ? m.note : `No other room in the same Zoom location is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
