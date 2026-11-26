@@ -504,3 +504,12 @@ test("review: a first check that could not read a room's devices says so in its 
   const r = await call(c);
   assert.match(r.content[0]!.text, /Not read in this first check:\n- Room Two: issues and devices could not be read/);
 });
+
+test("review: a first check on a partial list words its notes for a first check", async () => {
+  const { state, client } = fakeAccount();
+  state.nextToken = "more";
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /- Room list: more rooms exist than were read\n/);
+  assert.doesNotMatch(text, /added or removed|not compared/);
+});

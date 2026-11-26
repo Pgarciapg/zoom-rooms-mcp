@@ -371,7 +371,12 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const summary = "No previous check to compare against.";
     // What this first check could not read is said now, not only in the structured output (Codex review, 11/25), so
     // the saved starting point is never taken as complete when it is not.
-    const text = notCompared.length ? [summary, "", "Not read in this first check:", ...notCompared.map((n) => `- ${n}`)].join("\n") : summary;
+    // Worded for a first check: nothing is compared yet, so "not compared" and "added or removed" clauses do not apply.
+    const firstWords = (n: string) =>
+      n
+        .replace(/, so its issues and devices were not compared$/, ", so its issues and devices were not read")
+        .replace(/[,;] (and |so )?rooms are not called added or removed( this time)?/, "");
+    const text = notCompared.length ? [summary, "", "Not read in this first check:", ...notCompared.map((n) => `- ${firstWords(n)}`)].join("\n") : summary;
     return { summary, text, changes: [], notCompared, firstRun: true };
   }
   const changes: Change[] = [];
