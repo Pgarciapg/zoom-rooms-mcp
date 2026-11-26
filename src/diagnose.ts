@@ -387,7 +387,18 @@ export const diagnosisText = (d: RoomDiagnosis): string => {
   if (d.moveTo) {
     const m = d.moveTo;
     // "Same Zoom location", not the floor: a location code can be a whole building.
-    if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map((r) => (r.name.endsWith(`(Zoom room ${r.id})`) ? r.name : `${r.name} (${r.id})`)).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
+    const label = (r: { id: string; name: string }) => (r.name.endsWith(`(Zoom room ${r.id})`) ? r.name : `${r.name} (${r.id})`);
+    // With a meeting size, rooms known to be too small are never listed as where to go (Codex review, 11/25): they get
+    // their own line after the rooms that fit or could not be compared.
+    const sizeOf = new Map((d.roomSizes?.attendees != null ? d.roomSizes.rooms : []).map((f) => [f.id, f]));
+    const small = m.rooms.filter((r) => sizeOf.get(r.id)?.fit === "too_small");
+    const usable = m.rooms.filter((r) => !small.includes(r));
+    const n = d.roomSizes?.attendees;
+    if (m.rooms.length && small.length) {
+      if (usable.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${usable.map(label).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
+      else lines.push("", `No free room in the same Zoom location that was compared seats ${n}${m.more ? ` (${m.more} more free ${m.more === 1 ? "room was" : "rooms were"} not shown)` : ""}.${m.note ? ` ${m.note}` : ""}`);
+      lines.push(`Free but too small for ${n}: ${small.map((r) => `${label(r)}, ${sizeOf.get(r.id)!.capacity} seats`).join("; ")}.`);
+    } else if (m.rooms.length) lines.push("", `Free now in the same Zoom location, healthy and not in a meeting: ${m.rooms.map(label).join(", ")}${m.more ? `, and ${m.more} more` : ""}.${m.note ? ` ${m.note}` : ""}`);
     else lines.push("", m.note && /^(Could not|Zoom gives no|This room's location)/.test(m.note) ? m.note : `No other room in the same Zoom location is healthy and free right now.${m.note ? ` ${m.note}` : ""}`);
     const s = d.roomSizes;
     if (s?.rooms.length) {

@@ -164,3 +164,26 @@ test("review: a failed seat read in the attention list is not compared and is no
   assert.equal(a.couldNotCheck.length, 0);
   assert.match(a.summary, /or move it to Room 401, free now/);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): for a ten-person meeting with only four- and six-seat rooms free, the text
+// listed both under "Free now" as if they were where to go.
+test("review: rooms too small for the meeting are never listed under Free now", async () => {
+  const d = await run(fake([broken, free("r2", "Huddle A"), free("r3", "Huddle B")], { r2: 4, r3: 6 }), 10);
+  const text = diagnosisText(d);
+  assert.doesNotMatch(text, /Free now in the same Zoom location, healthy and not in a meeting: .*Huddle/);
+  assert.match(text, /No free room in the same Zoom location that was compared seats 10\./);
+  assert.match(text, /Free but too small for 10: Huddle A \(r2\), 4 seats; Huddle B \(r3\), 6 seats\./);
+});
+
+test("review: a room that fits stays under Free now and the small one moves to its own line", async () => {
+  const d = await run(fake([broken, free("r2", "Big"), free("r3", "Tiny")], { r2: 12, r3: 4 }), 10);
+  const text = diagnosisText(d);
+  assert.match(text, /Free now in the same Zoom location, healthy and not in a meeting: Big \(r2\)\./);
+  assert.match(text, /Free but too small for 10: Tiny \(r3\), 4 seats\./);
+});
+
+test("review: without a meeting size every free room stays under Free now", async () => {
+  const d = await run(fake([broken, free("r2", "Huddle A")], { r2: 4 }));
+  assert.match(diagnosisText(d), /Free now in the same Zoom location, healthy and not in a meeting: Huddle A \(r2\)\./);
+  assert.doesNotMatch(diagnosisText(d), /too small/);
+});

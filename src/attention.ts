@@ -6,7 +6,7 @@
 import { alertsNote, devicesClearLine } from "./all-clear.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
-import { allocateMoveTo, besideRoom, cleanName, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
+import { allocateMoveTo, cleanName, sizeWords, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
 import { deviceName } from "./device-fields.ts";
 
@@ -221,7 +221,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       // Two problem rooms with one name also carry Zoom's room id, the label diagnose_room uses for them.
       const twin = detailed.filter((o) => o.name.toLowerCase() === room.name.toLowerCase()).length > 1;
       const place = [room.where, twin ? `Zoom room ${cleanName(room.id)}` : null].filter(Boolean).join(", ");
-      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${place ? ` (${place})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${besideRoom(room.moveToSize.capacity, { name: room.name, seats: room.seats })}, capacity not compared)` : ""}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
+      const head = `${i + 1}. [${room.level === "critical" ? "Critical" : "Warning"}] ${room.name}${place ? ` (${place})` : ""}: ${room.status}${room.inMeeting ? `, in a meeting right now (fix after it ends${room.moveTo.length ? `, or move it to ${room.moveTo[0]!.name}${sizeWords(room)}, free now in the same Zoom location` : room.moveToNote ? `; ${room.moveToNote}` : ""})` : ""}.`;
       lines.push(head);
       for (const issue of room.issues) lines.push(`   Issue: ${issue.issue}${issue.since ? ` (since ${issue.since}${issue.age ? `, ${issue.age} ago` : ""})` : ""}.`);
       if (room.devices.length) lines.push(`   Devices not online: ${room.devices.join("; ")}.`);

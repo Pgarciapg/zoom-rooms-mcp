@@ -73,3 +73,14 @@ test("card: the HTML loads nothing from the network (no links, remote scripts, i
   assert.doesNotMatch(CARD_HTML, /@import\b|@font-face\b/i);
   assert.doesNotMatch(CARD_HTML, /url\(\s*['"]?https?:/i);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): the card offered a four-seat room for a twelve-seat room's meeting without
+// the seat words the text answer has.
+test("review: the card words a move-to suggestion's seats exactly like the text answer", async () => {
+  const { sizeWords } = await import("../src/move-to.ts");
+  assert.equal(sizeWords({ name: "Boardroom", seats: 12, moveToSize: { capacity: 4 } }), " (seats 4, fewer than Boardroom's 12, capacity not compared)");
+  assert.equal(sizeWords({ name: "Boardroom", seats: 12, moveToSize: { capacity: null } }), "");
+  assert.equal(sizeWords({ name: "Boardroom", seats: null, moveToSize: null }), "");
+  // The built card carries that wording (it is bundled from the same helper).
+  assert.ok(CARD_HTML.includes("capacity not compared)"), "the card has no seat words for its move-to suggestion");
+});

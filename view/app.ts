@@ -1,6 +1,8 @@
 import { App, applyDocumentTheme } from "@modelcontextprotocol/ext-apps";
 import type { AttentionCard } from "../src/card-model.ts";
 import { SERVER_VERSION } from "../src/version.ts";
+import { sizeWords } from "../src/move-to.ts";
+
 
 const root = document.querySelector<HTMLElement>("#card")!;
 
@@ -42,7 +44,7 @@ export const paint = (data: AttentionCard) => {
           const badges = [el("span", { class: `badge${offline ? " l-critical" : ""}` }, room.status || "No status")];
           const free = (room as { moveTo?: { name: string }[] }).moveTo ?? [];
           const taken = (room as { moveToNote?: string | null }).moveToNote ?? null;
-          if (room.inMeeting) badges.push(el("span", { class: "badge meeting", title: "A meeting is running in this room now" }, free.length ? `In a meeting: fix after it ends, or move it to ${free[0]!.name}` : taken ? `In a meeting: fix after it ends; ${taken}` : "In a meeting: fix after it ends"));
+          if (room.inMeeting) badges.push(el("span", { class: "badge meeting", title: "A meeting is running in this room now" }, free.length ? `In a meeting: fix after it ends, or move it to ${free[0]!.name}${sizeWords(room)}` : taken ? `In a meeting: fix after it ends; ${taken}` : "In a meeting: fix after it ends"));
           const body: Node[] = [];
           if (room.issues.length)
             body.push(el("ul", { class: "issues" }, ...room.issues.map((i) => el("li", {}, i.issue, ...(i.since ? [el("span", { class: "since" }, ` since ${i.since}${i.age ? `, ${i.age} ago` : ""}`)] : [])))));

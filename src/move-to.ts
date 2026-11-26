@@ -151,6 +151,13 @@ const people = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
  * Without a meeting size, the problem room's own seats (when Zoom gives them) are the next best hint: a suggestion with
  * fewer seats says so. It is a comparison of two rooms, never a fit claim.
  */
+/**
+ * A move-to suggestion's seats, worded once for the text answer and the card alike (Codex review, 11/25): the card
+ * never offers a smaller room for a meeting without saying so.
+ */
+export const sizeWords = (room: { name: string; seats?: number | null; moveToSize?: { capacity: number | null } | null }) =>
+  room.moveToSize?.capacity != null ? ` (seats ${room.moveToSize.capacity}${besideRoom(room.moveToSize.capacity, { name: room.name, seats: room.seats ?? null })}, capacity not compared)` : "";
+
 export const besideRoom = (capacity: number, own: { name: string; seats: number | null }) =>
   own.seats == null ? "" : capacity < own.seats ? `, fewer than ${own.name}'s ${own.seats}` : capacity === own.seats ? `, the same as ${own.name}` : `, more than ${own.name}'s ${own.seats}`;
 
