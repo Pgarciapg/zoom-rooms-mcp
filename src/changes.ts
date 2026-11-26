@@ -378,7 +378,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   const nameCount = new Map<string, number>();
   const count = (name: string) => nameCount.set(name.toLowerCase(), (nameCount.get(name.toLowerCase()) ?? 0) + 1);
   for (const f of reading.rooms.values()) count(f.name);
-  for (const [id, before] of Object.entries(previous.rooms)) if (!reading.rooms.has(id)) count(before.list.name);
+  if (reading.fullList) for (const [id, before] of Object.entries(previous.rooms)) if (!reading.rooms.has(id)) count(before.list.name);
   const labelFor = (id: string, name: string) => ((nameCount.get(name.toLowerCase()) ?? 0) > 1 && name !== id ? `${name} (Zoom room ${id})` : name);
   const times: string[] = [];
   for (const [id, now_] of reading.rooms) {
