@@ -88,6 +88,9 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       }
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
+      // A later page with no rooms list is a bad page, never the end of the list (Codex review, 11/25): read as the end,
+      // it would make what_changed call every unread room removed.
+      if (page > 1 && batch == null) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list without a rooms list.`);
       // A room's activation_code can sign a device into the account; it is never needed here, so it never leaves this client.
       rooms.push(...(batch ?? []).map((r: unknown) => (r && typeof r === "object" && !Array.isArray(r) ? (({ activation_code: _code, ...rest }) => rest)(r as Record<string, unknown>) : r)));
       token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
@@ -121,6 +124,7 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       last = await this.request(`/rooms/locations?${query}`);
       const batch = (last as any)?.locations;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the location list in an unexpected shape.`);
+      if (page > 1 && batch == null) throw new ZoomApiError(502, `Zoom returned page ${page} of the location list without a locations list.`);
       locations.push(...(batch ?? []));
       token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
       if (!token) return { ...last, locations, page_count: page, next_page_token: "" };

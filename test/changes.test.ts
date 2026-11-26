@@ -466,3 +466,33 @@ test("review: when Zoom is too slow for the time budget, the check answers in ti
   const next = nextSnapshot(reading, snap, "acct", NOW);
   for (const id of unread) assert.deepEqual(next.rooms[id]!.detail, snap.rooms[id]!.detail, `${id} lost its last reading`);
 });
+
+// Codex review of b4974a8 (MEDIUMs, 11/25).
+test("review: an issue whose status turns resolved reads as closed", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  state.issues.r2 = [{ issue: "Camera disconnected", status: "open" }];
+  await call(c);
+  state.issues.r2 = [{ issue: "Camera disconnected", status: "resolved" }];
+  const r = await call(c);
+  assert.match(r.content[0]!.text, /Issue closed: Camera disconnected\./);
+});
+
+test("review: two rooms with one name that both go offline are two changed rooms, each with its id", async () => {
+  const { state, client } = fakeAccount();
+  state.rooms = [
+    { id: "l1", name: "Lobby", status: "Available", health: "Healthy" },
+    { id: "l2", name: "Lobby", status: "Available", health: "Healthy" },
+  ];
+  state.issues = {};
+  state.devices = {};
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = state.rooms.map((r) => ({ ...r, status: "Offline" }));
+  const r = await call(c);
+  assert.match(r.structuredContent.summary, /^2 rooms changed, 2 for the worse/);
+  assert.match(r.content[0]!.text, /Lobby \(Zoom room l1\):\n- \[worse\] Went offline/);
+  assert.match(r.content[0]!.text, /Lobby \(Zoom room l2\):\n- \[worse\] Went offline/);
+});

@@ -180,6 +180,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v.trim() : v == nul
 const arr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const OK_DEVICE = /^(online|connected|available|in ?use)$/i;
+const RESOLVED = /^(resolved|closed|cleared|fixed)$/i;
 /** Own entries only, so a room id like "constructor" is never mistaken for a built-in. */
 const prevRoom = (s: Snapshot | null | undefined, id: string): RoomSnapshot | undefined => (s && Object.hasOwn(s.rooms, id) ? s.rooms[id] : undefined);
 const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
@@ -211,6 +212,8 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
   // Kept as written; compared ignoring case and spacing.
   const byKey = new Map<string, string>();
   for (const i of issuesRead ? rawIssues : []) {
+    // A resolved or closed issue is not open, whatever its text (Codex review, 11/25).
+    if (isObj(i) && RESOLVED.test(str(i.status))) continue;
     const text = str(isObj(i) ? i.issue ?? i.message ?? i.description : i).replace(/\s+/g, " ");
     if (!text) throw new Error("an open issue came back in a shape that could not be read");
     if (!byKey.has(issueKey(text))) byKey.set(issueKey(text), text);
@@ -370,24 +373,32 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   }
   const changes: Change[] = [];
   const add = (room: string, direction: Direction, text: string) => changes.push({ room, direction, text });
+  // Two rooms with one name ("Lobby" in two buildings) carry Zoom's room id, so their changes are never merged under one
+  // heading or counted as one room (Codex review, 11/25).
+  const nameCount = new Map<string, number>();
+  const count = (name: string) => nameCount.set(name.toLowerCase(), (nameCount.get(name.toLowerCase()) ?? 0) + 1);
+  for (const f of reading.rooms.values()) count(f.name);
+  for (const [id, before] of Object.entries(previous.rooms)) if (!reading.rooms.has(id)) count(before.list.name);
+  const labelFor = (id: string, name: string) => ((nameCount.get(name.toLowerCase()) ?? 0) > 1 && name !== id ? `${name} (Zoom room ${id})` : name);
   const times: string[] = [];
   for (const [id, now_] of reading.rooms) {
     const before = prevRoom(previous, id);
+    const nm = labelFor(id, now_.name);
     if (!before) {
-      if (previous.fullListAt && reading.fullList) add(now_.name, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
+      if (previous.fullListAt && reading.fullList) add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
       else notCompared.push(`${now_.name}: not in the last check's room list, which was not read in full, so it may not be new`);
       continue;
     }
     times.push(before.list.at);
     const was = before.list;
-    if (was.name !== now_.name) add(now_.name, "changed", `Renamed from "${was.name}".`);
-    if (!isOffline(was.status) && isOffline(now_.status)) add(now_.name, "worse", `Went offline (was ${was.status}).`);
-    else if (isOffline(was.status) && UP_STATUS.test(now_.status)) add(now_.name, "better", `Back online (now ${now_.status}).`);
-    else if (isOffline(was.status) && !isOffline(now_.status)) add(now_.name, "changed", `Status now reads "${now_.status}" (was Offline); not counted as back online.`);
+    if (was.name !== now_.name) add(nm, "changed", `Renamed from "${was.name}".`);
+    if (!isOffline(was.status) && isOffline(now_.status)) add(nm, "worse", `Went offline (was ${was.status}).`);
+    else if (isOffline(was.status) && UP_STATUS.test(now_.status)) add(nm, "better", `Back online (now ${now_.status}).`);
+    else if (isOffline(was.status) && !isOffline(now_.status)) add(nm, "changed", `Status now reads "${now_.status}" (was Offline); not counted as back online.`);
     const hw = healthRank(was.health);
     const hn = healthRank(now_.health);
-    if (hw !== undefined && hn !== undefined && hn !== hw) add(now_.name, hn > hw ? "worse" : "better", `Health ${hn > hw ? "worse" : "better"}: ${now_.health} (was ${was.health}).`);
-    else if ((hw === undefined) !== (hn === undefined) || (hw === undefined && was.health !== now_.health)) add(now_.name, "changed", `Health now reads "${now_.health}" (was "${was.health}").`);
+    if (hw !== undefined && hn !== undefined && hn !== hw) add(nm, hn > hw ? "worse" : "better", `Health ${hn > hw ? "worse" : "better"}: ${now_.health} (was ${was.health}).`);
+    else if ((hw === undefined) !== (hn === undefined) || (hw === undefined && was.health !== now_.health)) add(nm, "changed", `Health now reads "${now_.health}" (was "${was.health}").`);
 
     const detailNow = reading.details.get(id);
     let detailWas = before.detail;
@@ -400,35 +411,35 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     if (!detailWas) {
       // First detailed reading of this room: what is open is new only if the room looked healthy last time.
       if (!unhappy(was)) {
-        for (const i of detailNow.issues) add(now_.name, "worse", `New issue: ${i} (the room was healthy at the last check).`);
-        for (const [d, s] of Object.entries(detailNow.down)) add(now_.name, "worse", `${d}: ${s} (the room was healthy at the last check).`);
+        for (const i of detailNow.issues) add(nm, "worse", `New issue: ${i} (the room was healthy at the last check).`);
+        for (const [d, s] of Object.entries(detailNow.down)) add(nm, "worse", `${d}: ${s} (the room was healthy at the last check).`);
       } else if (detailNow.issues.length || Object.keys(detailNow.down).length) notCompared.push(`${now_.name}: its issues and devices were not read last time, so this is their first reading`);
       continue;
     }
     detailWas = carryUnnamed(detailWas, detailNow);
     // One line for all such rooms, not one per room per check (Sonnet review, 11/25): on a live account it is all of them.
-    if (detailWas.issuesRead === false || detailNow.issuesRead === false) issuesUnread.push(now_.name);
+    if (detailWas.issuesRead === false || detailNow.issuesRead === false) issuesUnread.push(nm);
     else {
       const wasKeys = new Set(detailWas.issues.map(issueKey));
       const nowKeys = new Set(detailNow.issues.map(issueKey));
-      for (const i of detailNow.issues) if (!wasKeys.has(issueKey(i))) add(now_.name, "worse", `New issue: ${i}.`);
-      for (const i of detailWas.issues) if (!nowKeys.has(issueKey(i))) add(now_.name, "better", `Issue closed: ${i}.`);
+      for (const i of detailNow.issues) if (!wasKeys.has(issueKey(i))) add(nm, "worse", `New issue: ${i}.`);
+      for (const i of detailWas.issues) if (!nowKeys.has(issueKey(i))) add(nm, "better", `Issue closed: ${i}.`);
     }
     for (const [d, s] of Object.entries(detailNow.down)) {
       const prev = detailWas.down[d];
-      if (prev === undefined) add(now_.name, "worse", `${d}: ${s} (was online).`);
-      else if (prev.toLowerCase() !== s.toLowerCase()) add(now_.name, "changed", `${d}: now ${s} (was ${prev}).`);
+      if (prev === undefined) add(nm, "worse", `${d}: ${s} (was online).`);
+      else if (prev.toLowerCase() !== s.toLowerCase()) add(nm, "changed", `${d}: now ${s} (was ${prev}).`);
     }
     // Back online only when the device is still listed; one that is gone from the list was never seen recover.
     for (const [d, s] of Object.entries(detailWas.down)) {
       if (d in detailNow.down) continue;
-      if (detailNow.seen && !detailNow.seen.includes(d)) add(now_.name, "changed", `${d}: no longer in the room's device list (was ${s}); not counted as back online.`);
-      else add(now_.name, "better", `${d}: back online (was ${s}).`);
+      if (detailNow.seen && !detailNow.seen.includes(d)) add(nm, "changed", `${d}: no longer in the room's device list (was ${s}); not counted as back online.`);
+      else add(nm, "better", `${d}: back online (was ${s}).`);
     }
   }
   for (const [id, before] of Object.entries(previous.rooms)) {
     if (reading.rooms.has(id)) continue;
-    if (reading.fullList) add(before.list.name, "changed", "No longer in the account's room list (removed or renamed to a new id).");
+    if (reading.fullList) add(labelFor(id, before.list.name), "changed", "No longer in the account's room list (removed or renamed to a new id).");
     else notCompared.push(`${before.list.name}: not in this check's room list, which was not read in full`);
   }
   const order: Record<Direction, number> = { worse: 0, changed: 1, better: 2 };

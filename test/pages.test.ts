@@ -121,3 +121,9 @@ test("review: a stall while reading the body also reads as a clear Zoom error", 
   }) as typeof fetch;
   await assert.rejects(new HttpZoomRoomsClient(creds()).getRoom("b"), /Zoom did not answer \/rooms\/b within 30 s/);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): a later page answering {} was read as the end of a complete list.
+test("review: a later page with no rooms list is an error, never the end of a complete list", async (t) => {
+  serve(t, [page(["a"], "t1"), () => new Response(JSON.stringify({}), { status: 200 })]);
+  await assert.rejects(new HttpZoomRoomsClient(creds()).listRooms(), /page 2 of the room list without a rooms list/);
+});
