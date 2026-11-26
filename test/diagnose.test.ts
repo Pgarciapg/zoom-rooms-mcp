@@ -270,3 +270,11 @@ test("review: a disconnected device and an issue that says it failed are still o
   assert.equal(d.findings.length, 1, JSON.stringify(d.findings));
   assert.equal(d.findings[0]!.level, "critical");
 });
+
+test("review: an alert that names a device in other failure words still explains its outage", async () => {
+  for (const text of ["Logitech Rally not working", "No video from Logitech Rally", "Logitech Rally unplugged"]) {
+    const d = await diagnoseRoom(fake(room({ health: "Critical", issues: [{ issue: text, severity: "critical" }] }), [{ name: "Logitech Rally", device_type: "Camera", status: "Disconnected" }]), "r1", NOW);
+    assert.equal(d.findings.length, 1, `${text}: ${JSON.stringify(d.findings.map((f) => f.subject))}`);
+    assert.match(d.findings[0]!.detail, new RegExp(text));
+  }
+});

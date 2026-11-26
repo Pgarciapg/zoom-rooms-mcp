@@ -80,6 +80,8 @@ const KNOWN_HEALTH = /^(healthy|warning|critical)$/i;
 /** Room computer states that mean it is up. Offline is a finding; anything else could not be classed. */
 export const UP_STATUS = /^(available|online|in ?meeting|idle|connected)$/i;
 /** Words that say something has stopped working. An issue joins a failing device only when it says one of these. */
+/** An alert that is a notice about a device, not a fault: an update, a firmware version, a reminder. */
+const NOTICE = /update|firmware|upgrade|available|version|reminder/i;
 export const FAILURE = /offline|disconnect|not detected|no signal|not responding|unreachable|down\b|fail|error|lost/i;
 const RESOLVED = /^(resolved|closed|cleared|fixed)$/i;
 
@@ -238,7 +240,8 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     const free = (i: number) => !usedIssues.has(i);
     // Only an issue that says the device stopped working explains the outage: "Logitech Rally firmware update available"
     // names the device but stays its own finding (Codex review, 11/25).
-    let matchIdx = issues.findIndex((issue, i) => free(i) && namesDevice(issue.issue, device) && FAILURE.test(issue.issue));
+    // Any other alert naming it joins ("Rally not working", "no video from Rally"; Sonnet review, 11/26).
+    let matchIdx = issues.findIndex((issue, i) => free(i) && namesDevice(issue.issue, device) && (FAILURE.test(issue.issue) || !NOTICE.test(issue.issue)));
     if (matchIdx < 0) matchIdx = issues.findIndex((issue, i) => free(i) && namesKind(issue.issue, device) && !failingNamedElsewhere(issue.issue, device));
     const match = matchIdx >= 0 ? issues[matchIdx]! : null;
     if (match) usedIssues.add(matchIdx);
