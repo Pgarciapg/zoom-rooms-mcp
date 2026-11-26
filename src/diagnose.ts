@@ -184,10 +184,12 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
   if (building && floorName) {
     room.where = `${building}, ${floorName}`;
-    room.placeKey = key(room.where);
+    // The location code, when Zoom gives one, keeps two campuses' identical "Building 1, 2nd Floor" apart (Codex
+    // review, 11/25); the text is the key only when there is no code.
+    room.placeKey = locId ? `code:${locId}` : key(room.where);
   } else if (locText || locId) {
     // A location code gets its name from Zoom's location tree; the group key stays the code.
-    room.placeKey = key(locText || locId);
+    room.placeKey = locId ? `code:${locId}` : key(locText);
     if (locText) room.where = locText;
     else {
       const label = await places.lookup(locId);

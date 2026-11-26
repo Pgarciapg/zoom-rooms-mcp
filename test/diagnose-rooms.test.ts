@@ -260,3 +260,14 @@ test("review: no-health rooms past the limit are counted as not read", async () 
   const d = await diagnoseRooms(account(rows, { a: detail("a"), b: detail("b"), c: detail("c") }, { a: ok, b: ok, c: ok }), NOW, 2);
   assert.match(d.couldNotCheck.join(" | "), /1 more room with no health from Zoom was not read/);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): two campuses with the same building and floor labels were one outage.
+test("review: offline rooms with the same building and floor text but different location codes are not one outage", async () => {
+  const rows = [row("a", "Offline", "Critical"), row("b", "Offline", "Critical")];
+  const details = { a: detail("a", { location: floor4, location_id: "CAMPUS-1-F4" }), b: detail("b", { location: floor4, location_id: "CAMPUS-2-F4" }) };
+  const d = await diagnoseRooms(account(rows, details, { a: ok, b: ok }), NOW);
+  assert.ok(!d.patterns.some((p) => p.kind === "location-offline"), JSON.stringify(d.patterns.map((p) => p.title)));
+  const same = { a: detail("a", { location: floor4, location_id: "F4" }), b: detail("b", { location: floor4, location_id: "F4" }) };
+  const d2 = await diagnoseRooms(account(rows, same, { a: ok, b: ok }), NOW);
+  assert.ok(d2.patterns.some((p) => p.kind === "location-offline"), JSON.stringify(d2.patterns.map((p) => p.title)));
+});
