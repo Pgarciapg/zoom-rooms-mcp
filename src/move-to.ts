@@ -60,14 +60,39 @@ export const allocateMoveTo = (
     const n = cleanName(name) || "another room";
     return (nameCount.get(cleanName(name).toLowerCase()) ?? 0) > 1 ? `${n} (number ${i + 1} in this list)` : n;
   };
-  const picks = wanted.map(({ name, candidates }, i) => {
-    // Among the rooms still open, take the one fewest later meetings could use, so a later meeting with a single option
-    // is not stranded (A can use R1 or R2, B only R1: A gets R2). Ties keep name order.
+  // As many meetings as possible get a room of their own (a maximum matching, by augmenting paths), worst room first:
+  // a meeting once seated stays seated, though it may be moved to another of its rooms to seat a later one. The greedy
+  // pick could strand one (A: X/Y, B: X/Z, C: X/Z, D: Y/W seats only three; this seats all four; Codex review, 11/25).
+  // Each meeting tries first the room fewest later meetings could use, ties in name order.
+  const order = wanted.map(({ candidates }, i) => {
     const later = (id: string) => wanted.slice(i + 1).filter((w) => w.candidates.some((c) => c.id === id)).length;
-    const pick = candidates.filter((c) => !givenTo.has(c.id)).reduce<{ id: string; name: string } | null>((best, c) => (!best || later(c.id) < later(best.id) ? c : best), null);
-    if (pick) givenTo.set(pick.id, label(name, i));
-    return pick;
+    return [...new Map(candidates.map((c) => [c.id, c])).values()].map((c, k) => ({ c, k, n: later(c.id) })).sort((a, b) => a.n - b.n || a.k - b.k).map((x) => x.c);
   });
+  const holder = new Map<string, number>(); // free room id -> index of the meeting it is given to
+  const picks: ({ id: string; name: string } | null)[] = wanted.map(() => null);
+  const seat = (i: number, tried: Set<string>): boolean => {
+    // A room nobody holds first, so no seated meeting is moved without need; only then move one along.
+    const open = order[i]!.find((c) => !tried.has(c.id) && !holder.has(c.id));
+    if (open) {
+      tried.add(open.id);
+      holder.set(open.id, i);
+      picks[i] = open;
+      return true;
+    }
+    for (const c of order[i]!) {
+      if (tried.has(c.id)) continue;
+      tried.add(c.id);
+      const h = holder.get(c.id);
+      if (h === undefined || seat(h, tried)) {
+        holder.set(c.id, i);
+        picks[i] = c;
+        return true;
+      }
+    }
+    return false;
+  };
+  wanted.forEach((_, i) => seat(i, new Set()));
+  picks.forEach((pick, i) => pick && givenTo.set(pick.id, label(wanted[i]!.name, i)));
   // Backups (after a meeting's own pick) are spare rooms nobody was given, and each spare backs up one meeting only, worst
   // room first, so two meetings never fall back to the same room. A later meeting can get fewer backups, never a shared one.
   const backedUp = new Set<string>();

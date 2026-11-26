@@ -350,3 +350,24 @@ test("review: two same-named free rooms with no health keep the id suffix last",
   const free = freeRoomsIn([row("r1"), row("r2")], new Set(), new Set(["L1"]));
   assert.deepEqual(free.map((f) => f.name), ["Huddle (Zoom gives no health) (Zoom room r1)", "Huddle (Zoom gives no health) (Zoom room r2)"]);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): the greedy allocator could leave a meeting without a room.
+for (const [label, rows] of [
+  ["A W/X, B W, C X/Z", [["A", "W", "X"], ["B", "W"], ["C", "X", "Z"]]],
+  ["A Y/Z, B X/Z, C X, D W/Z", [["A", "Y", "Z"], ["B", "X", "Z"], ["C", "X"], ["D", "W", "Z"]]],
+  ["A X/Y, B X/Z, C X/Z, D Y/W", [["A", "X", "Y"], ["B", "X", "Z"], ["C", "X", "Z"], ["D", "Y", "W"]]],
+] as const) {
+  test(`review: meetings ${label} all get a room of their own`, () => {
+    const got = allocateMoveTo(rows.map(([name, ...ids]) => ({ name, candidates: ids.map((id) => ({ id, name: id })) })));
+    const firsts = got.map((g) => g.moveTo[0]?.id);
+    assert.ok(firsts.every(Boolean), JSON.stringify(got));
+    assert.equal(new Set(firsts).size, rows.length, JSON.stringify(firsts));
+  });
+}
+
+test("review: the allocator still seats the earlier (worse) meeting when not everyone can be seated", () => {
+  const got = allocateMoveTo([{ name: "A", candidates: [{ id: "X", name: "X" }] }, { name: "B", candidates: [{ id: "X", name: "X" }] }]);
+  assert.equal(got[0]!.moveTo[0]?.id, "X");
+  assert.equal(got[1]!.moveTo.length, 0);
+  assert.match(got[1]!.moveToNote ?? "", /suggested for A/);
+});
