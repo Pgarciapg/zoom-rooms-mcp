@@ -369,7 +369,10 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   const notCompared = [...reading.couldNotCheck, ...reading.skippedDetail.map((n) => `${n}: past the ${DETAIL_LIMIT}-room detail limit, so its issues and devices were not compared`)];
   if (!previous) {
     const summary = "No previous check to compare against.";
-    return { summary, text: summary, changes: [], notCompared, firstRun: true };
+    // What this first check could not read is said now, not only in the structured output (Codex review, 11/25), so
+    // the saved starting point is never taken as complete when it is not.
+    const text = notCompared.length ? [summary, "", "Not read in this first check:", ...notCompared.map((n) => `- ${n}`)].join("\n") : summary;
+    return { summary, text, changes: [], notCompared, firstRun: true };
   }
   const changes: Change[] = [];
   const add = (room: string, direction: Direction, text: string) => changes.push({ room, direction, text });

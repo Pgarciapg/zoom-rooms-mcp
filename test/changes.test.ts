@@ -496,3 +496,11 @@ test("review: two rooms with one name that both go offline are two changed rooms
   assert.match(r.content[0]!.text, /Lobby \(Zoom room l1\):\n- \[worse\] Went offline/);
   assert.match(r.content[0]!.text, /Lobby \(Zoom room l2\):\n- \[worse\] Went offline/);
 });
+
+test("review: a first check that could not read a room's devices says so in its text", async () => {
+  const { state, client } = fakeAccount();
+  state.failDetail.add("r2");
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  const r = await call(c);
+  assert.match(r.content[0]!.text, /Not read in this first check:\n- Room Two: issues and devices could not be read/);
+});
