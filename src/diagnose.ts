@@ -113,13 +113,18 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const couldNotCheck: string[] = [];
   let detail: any = null;
   let deviceData: unknown[] | null = null;
+  // Both reads at once, so a slow Zoom costs one wait, not two (Codex review, 11/25: an offline room could pass 60 s).
+  const detailRead = client.getRoom(roomId);
+  const devicesRead = client.getRoomDevices(roomId);
+  detailRead.catch(() => undefined);
+  devicesRead.catch(() => undefined);
   try {
-    detail = await client.getRoom(roomId);
+    detail = await detailRead;
   } catch (error) {
     couldNotCheck.push(`Room details: ${msg(error)}`);
   }
   try {
-    const got = (await client.getRoomDevices(roomId)) as any;
+    const got = (await devicesRead) as any;
     const list = Array.isArray(got) ? got : got?.devices;
     if (list != null && !Array.isArray(list)) couldNotCheck.push("Devices: Zoom answered in an unexpected shape, so none could be checked.");
     else deviceData = arr(list);

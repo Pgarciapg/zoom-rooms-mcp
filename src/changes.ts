@@ -256,10 +256,13 @@ const carryUnnamed = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts):
 };
 
 /** Reads the room list, then the detail of every room that looks unhappy now or did last time (up to DETAIL_LIMIT). */
-export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null, opts: { budgetMs?: number; concurrency?: number } = {}): Promise<Reading> => {
+export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | null, opts: { budgetMs?: number; concurrency?: number; deadline?: number } = {}): Promise<Reading> => {
   const started = Date.now();
   const couldNotCheck: string[] = [];
-  const list = await client.listRooms();
+  // One deadline for the whole reading, room-list pages included. A caller that already waited (what_changed queued
+  // behind another call) passes its own earlier deadline, so the wait counts against the same budget.
+  const deadline = Math.min(started + (opts.budgetMs ?? DETAIL_BUDGET_MS), opts.deadline ?? Infinity);
+  const list = await client.listRooms({ deadline });
   const rawRows = Array.isArray(list) ? list : (list as any)?.rooms;
   // A list in a shape we cannot read is an error, never an empty account (that would read as every room removed).
   if (!Array.isArray(rawRows)) throw new Error("Zoom returned the room list in an unexpected shape, so nothing was compared or saved.");
@@ -296,8 +299,7 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   // A few rooms at a time, inside one time budget, so a slow Zoom still gets an answer back before the MCP client's
   // 60 s deadline (Codex review, 11/25). A room not read in time is named and keeps its last saved reading.
   const queue = wanted.slice(0, DETAIL_LIMIT);
-  const budgetMs = opts.budgetMs ?? DETAIL_BUDGET_MS;
-  const deadline = started + budgetMs;
+  const budgetMs = deadline - started;
   const failed = new Map<string, string>();
   let next = 0;
   const worker = async () => {
@@ -324,7 +326,7 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   for (const [id, f] of queue) {
     if (details.has(id)) continue;
     if (failed.has(id)) couldNotCheck.push(`${f.name}: issues and devices could not be read (${failed.get(id)})`);
-    else couldNotCheck.push(`${f.name}: issues and devices not read; Zoom was slow, so room details stopped after ${Math.round(budgetMs / 1000)} s to answer in time`);
+    else couldNotCheck.push(`${f.name}: issues and devices not read; Zoom was slow, so room details stopped after ${Math.max(0, Math.round(budgetMs / 1000))} s to answer in time`);
   }
   return { rooms, details, fullList, couldNotCheck, skippedDetail };
 };

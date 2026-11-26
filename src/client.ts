@@ -3,7 +3,8 @@ import { DEMO_SEATS, EARLIER_DETAILS, EARLIER_DEVICES, EARLIER_ROOMS, MOCK_LOCAT
 
 /** The read-only Zoom Rooms calls the MCP tools need. */
 export interface ZoomRoomsClient {
-  listRooms(): Promise<unknown>;
+  /** `deadline` (ms since epoch): stop paging then and return the pages read so far, keeping Zoom's next_page_token. */
+  listRooms(opts?: { deadline?: number }): Promise<unknown>;
   getRoom(roomId: string): Promise<unknown>;
   getRoomDevices(roomId: string): Promise<unknown>;
   /** Zoom's location tree (names for location codes). Optional: a client without it shows places as codes. */
@@ -34,14 +35,14 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
   }
 
-  private async request(path: string): Promise<unknown> {
+  private async request(path: string, timeoutMs = ZOOM_TIMEOUT_MS): Promise<unknown> {
     // The timeout covers the token, the headers and the body alike: any stall reads as one clear Zoom error.
     try {
       const token = await getAccessToken(this.creds);
       const res = await fetch(`${this.baseUrl}${path}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         // A stalled Zoom never holds a tool (or the what_changed queue) forever (Codex review, 11/25).
-        signal: AbortSignal.timeout(ZOOM_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -49,7 +50,7 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       }
       return await res.json();
     } catch (error) {
-      if (isTimeout(error)) throw new ZoomApiError(504, `Zoom did not answer ${path} within ${ZOOM_TIMEOUT_MS / 1000} s.`);
+      if (isTimeout(error)) throw new ZoomApiError(504, `Zoom did not answer ${path} within ${Math.round(timeoutMs / 1000)} s.`);
       throw error;
     }
   }
@@ -59,14 +60,25 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
    * fails throws, so callers never get a partial list presented as complete. If the page cap is hit, the result keeps
    * Zoom's next_page_token, so callers can see the list is not whole.
    */
-  async listRooms() {
+  async listRooms(opts: { deadline?: number } = {}) {
     const rooms: unknown[] = [];
     const seen = new Set<string>();
     let token = "";
     let last: any = {};
     for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
       const query = `page_size=${ROOM_PAGE_SIZE}${token ? `&next_page_token=${encodeURIComponent(token)}` : ""}`;
-      last = await this.request(`/rooms?${query}`);
+      // Past the first page, paging stops at the caller's deadline and returns what it has, marked not whole by the
+      // kept token, so a slow Zoom still lets the tool answer before the MCP client gives up (Codex review, 11/25).
+      if (page > 1 && opts.deadline !== undefined) {
+        const left = opts.deadline - Date.now();
+        if (left <= 0) return { ...last, rooms, page_count: page - 1, next_page_token: token };
+        try {
+          last = await this.request(`/rooms?${query}`, Math.min(ZOOM_TIMEOUT_MS, left));
+        } catch (error) {
+          if (error instanceof ZoomApiError && error.status === 504 && Date.now() >= opts.deadline - 50) return { ...last, rooms, page_count: page - 1, next_page_token: token };
+          throw error;
+        }
+      } else last = await this.request(`/rooms?${query}`);
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
       // A room's activation_code can sign a device into the account; it is never needed here, so it never leaves this client.

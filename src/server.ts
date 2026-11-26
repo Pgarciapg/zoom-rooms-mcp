@@ -9,7 +9,7 @@ import { diagnoseRooms } from "./diagnose-rooms.ts";
 import { findFreeRoom } from "./free-room.ts";
 import { CARD_HTML } from "./generated/card.ts";
 import { EarlierDemoZoomRoomsClient, type ZoomRoomsClient } from "./client.ts";
-import { compare, defaultSnapshotPath, FileSnapshotStore, MemorySnapshotStore, nextSnapshot, readAccount, type Snapshot, type SnapshotStore } from "./changes.ts";
+import { compare, DETAIL_BUDGET_MS, defaultSnapshotPath, FileSnapshotStore, MemorySnapshotStore, nextSnapshot, readAccount, type Snapshot, type SnapshotStore } from "./changes.ts";
 import { CARD_URI, SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
 export type Source = "zoom" | "demo";
@@ -24,7 +24,42 @@ export interface ServerOptions {
   /** Fingerprint of the Zoom account (accountFingerprint), so two accounts are never compared. Required for live what_changed. */
   account?: string;
   now?: () => number;
+  /** Longest any tool takes before it answers anyway (default ANSWER_BUDGET_MS). For tests. */
+  answerBudgetMs?: number;
 }
+
+/**
+ * Every tool answers within this, waits and Zoom paging included, so a default MCP client (60 s) always gets a reply
+ * (Codex review, 11/25). Past it the tool answers with a clear "Zoom was too slow" error, and what_changed saves nothing.
+ */
+export const ANSWER_BUDGET_MS = 50_000;
+
+const tooSlow = (ms: number) =>
+  fail(new Error(`Zoom was too slow to answer within ${Math.round(ms / 1000)} s, so this call stopped before the chat app gives up. Nothing was saved or changed. Try again in a minute.`));
+
+/** Runs a tool handler, but answers with tooSlow once the budget is spent. `late()` tells the handler it was cut off. */
+const inTime =
+  <A, R>(ms: number, run: (args: A, late: () => boolean, startedAt: number) => Promise<R>) =>
+  async (args: A) => {
+    const startedAt = Date.now();
+    let cut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((resolve) => {
+      timer = setTimeout(() => resolve("late"), ms);
+    });
+    const work = run(args, () => cut, startedAt);
+    work.catch(() => undefined);
+    try {
+      const got = await Promise.race([work, late]);
+      if (got === "late") {
+        cut = true;
+        return tooSlow(ms);
+      }
+      return got as R;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
 /** Demo mode's saved previous check: the campus a day earlier. Never touches the real file. */
 export const demoBaseline = async (now: number): Promise<Snapshot> => {
@@ -62,7 +97,8 @@ export const SAVES_LOCALLY = { readOnlyHint: false, destructiveHint: false, idem
 
 export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagnose_rooms", "diagnose_room", "find_free_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
 
-export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now }: ServerOptions): McpServer => {
+export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now, answerBudgetMs = ANSWER_BUDGET_MS }: ServerOptions): McpServer => {
+  const budget = answerBudgetMs;
   let store: SnapshotStore | null = snapshots ?? null;
   let changesQueue: Promise<unknown> = Promise.resolve();
   const accountKey = source === "demo" ? "demo" : account;
@@ -82,7 +118,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     inputSchema: {},
     annotations: READ_ONLY,
   };
-  const runAttention = async () => {
+  const runAttention = inTime(budget, async () => {
     try {
       const result = await roomsNeedingAttention(client);
       // The card reads _meta.card; content and structuredContent are exactly what they are without the card.
@@ -90,7 +126,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     } catch (error) {
       return fail(error);
     }
-  };
+  });
   if (cardHtml) registerAppTool(server, "get_rooms_needing_attention", { ...attentionConfig, _meta: { ui: { resourceUri: CARD_URI, visibility: ["model", "app"] } } }, runAttention);
   else server.registerTool("get_rooms_needing_attention", attentionConfig, runAttention);
 
@@ -104,17 +140,18 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     },
     // One what_changed at a time (Codex review, 11/25): a slow older call finishing last would otherwise overwrite the
     // newer saved check. Each call waits for the one before it, then reads and saves on its own.
-    ({ save = true }: { save?: boolean }) => {
-      const run = changesQueue.then(() => whatChanged(save));
+    // The wait behind an earlier call counts against this call's own budget (Codex review, 11/25).
+    inTime(budget, ({ save = true }: { save?: boolean }, late, startedAt) => {
+      const run = changesQueue.then(() => whatChanged(save, late, startedAt + Math.min(DETAIL_BUDGET_MS, budget * 0.8)));
       changesQueue = run.then(
         () => undefined,
         () => undefined,
       );
       return run;
-    },
+    }),
   );
 
-  async function whatChanged(save: boolean) {
+  async function whatChanged(save: boolean, late: () => boolean, deadline: number) {
       try {
         const t = now();
         if (!accountKey) throw new Error("what_changed needs the Zoom account to keep its checks apart; start the server with credentials or --demo.");
@@ -129,9 +166,11 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
           else throw new Error(`Could not compare: ${why}.`);
         }
         if (previous && previous.account !== accountKey) throw new Error("The saved check belongs to a different Zoom account, so nothing was compared or saved. Point ZOOM_ROOMS_STATE at a file for this account.");
-        const reading = await readAccount(client, previous);
+        const reading = await readAccount(client, previous, { deadline });
         const report = compare(reading, previous, t);
         let saved = save ? `This check was saved as the starting point for next time, in ${store.where}.` : "This check was not saved; the starting point is unchanged.";
+        // This call already answered "too slow": never save a check nobody was shown.
+        if (late()) save = false;
         if (save) {
           try {
             // Another copy of this server (a second chat or app) may have saved a newer check while this one read Zoom
@@ -169,14 +208,14 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: {},
       annotations: READ_ONLY,
     },
-    async () => {
+    inTime(budget, async () => {
       try {
         const result = await diagnoseRooms(client);
         return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -190,14 +229,14 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       },
       annotations: READ_ONLY,
     },
-    async ({ roomId, attendees }: { roomId: string; attendees?: number }) => {
+    inTime(budget, async ({ roomId, attendees }: { roomId: string; attendees?: number }) => {
       try {
         const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true, attendees });
         return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -211,14 +250,14 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       },
       annotations: READ_ONLY,
     },
-    async ({ attendees, near }: { attendees?: number; near?: string }) => {
+    inTime(budget, async ({ attendees, near }: { attendees?: number; near?: string }) => {
       try {
         const result = await findFreeRoom(client, { attendees, near });
         return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -229,7 +268,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: {},
       annotations: READ_ONLY,
     },
-    guard(() => client.listRooms(), source),
+    inTime(budget, guard(() => client.listRooms(), source)),
   );
 
   server.registerTool(
@@ -240,7 +279,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: { roomId },
       annotations: READ_ONLY,
     },
-    guard(({ roomId }: { roomId: string }) => client.getRoom(roomId), source),
+    inTime(budget, guard(({ roomId }: { roomId: string }) => client.getRoom(roomId), source)),
   );
 
   server.registerTool(
@@ -251,7 +290,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: { roomId },
       annotations: READ_ONLY,
     },
-    guard(({ roomId }: { roomId: string }) => client.getRoomDevices(roomId), source),
+    inTime(budget, guard(({ roomId }: { roomId: string }) => client.getRoomDevices(roomId), source)),
   );
 
   return server;
