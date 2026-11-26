@@ -255,3 +255,31 @@ test("review: the named room with no health is called free, not free and healthy
   assert.match(a.summary, /Board Room itself is free right now \(Zoom gives no health\)/);
   assert.doesNotMatch(a.summary, /Board Room itself is free and healthy/);
 });
+
+// Codex review of b4974a8 (MEDIUMs, 11/25).
+test("review: a named room with no location that is free shows its own seats for the meeting and the calendar reminder", async () => {
+  const a = await findFreeRoom(fake([{ id: "b", name: "Boardroom", status: "Available", health: "Healthy" }], { b: 4 }), { near: "Boardroom", attendees: 10 });
+  assert.match(a.summary, /Boardroom itself is free and healthy right now \(seats 4, too small for 10 people\), but it has no Zoom location/);
+  assert.match(a.summary, /check the room's calendar/);
+});
+
+test("review: when only the named room itself is free, the calendar reminder is still given", async () => {
+  const a = await findFreeRoom(fake([room("b", "Board Room"), room("x", "Busy", "L4", "In Meeting")]), { near: "Board Room" });
+  assert.match(a.summary, /Board Room itself is free and healthy right now\. No other room is free/);
+  assert.match(a.summary, /check the room's calendar/);
+});
+
+test("review: a near of only spaces is refused, never matched to rooms with no name", async () => {
+  const a = await findFreeRoom(fake([{ id: "", name: "", status: "Available", health: "Healthy", location_id: "L4" }, room("h", "Huddle")]), { near: "   " });
+  assert.match(a.summary, /blank/);
+  assert.equal(a.rooms.length, 0);
+});
+
+test("review: rooms with no health from Zoom are not counted as healthy in the summary", async () => {
+  const rows = [room("h", "Huddle"), { id: "n", name: "No Health", status: "Available", location_id: "L4" }];
+  const a = await findFreeRoom(fake(rows));
+  assert.match(a.summary, /^2 rooms are free right now: 1 healthy, 1 with no health from Zoom\./);
+  const all = await findFreeRoom(fake([{ id: "n", name: "No Health", status: "Available", location_id: "L4" }]));
+  assert.match(all.summary, /^1 room is free right now \(Zoom gives no health for it\)\./);
+  assert.match(all.summary, /healthy where Zoom gives health/);
+});

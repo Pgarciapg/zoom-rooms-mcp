@@ -35,7 +35,8 @@ export interface FreeRoomAnswer {
   couldNotCheck: string[];
 }
 
-const CALENDAR = "Free here means healthy and not in a meeting in Zoom's room list right now; Zoom's room list does not show later bookings, so check the room's calendar before taking it.";
+// Not "healthy" for every room: Zoom's documented room list gives no health, and such rooms are marked (11/26).
+const CALENDAR = "Free here means not in a meeting in Zoom's room list right now, and healthy where Zoom gives health; Zoom's room list does not show later bookings, so check the room's calendar before taking it.";
 
 export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: number | null; near?: string | null } = {}): Promise<FreeRoomAnswer> => {
   const attendees = opts.attendees ?? null;
@@ -54,14 +55,23 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   }
 
   const idOf = (r: Record<string, unknown>) => str(r.id) || str(r.room_id);
+  // With a meeting size, the named room's own seats are looked up too, so "free" never reads as "fits". A room with no
+  // Zoom id has no room profile to read: its seats are said as unknown, never looked up with an empty id.
+  const ownFit = async (room: { id: string }) => {
+    if (attendees == null) return "";
+    if (!room.id) return " (its seats can't be looked up: it has no Zoom id)";
+    return ` (${(await lookUpFits(client, [room.id], attendees))[0]!.text})`;
+  };
   let near: { id: string; name: string; location: string } | null = null;
   let place: { name: string; codes: Set<string> } | null = null;
   let nearFree = false;
   let nearNoHealth = "";
-  if (opts.near) {
+  if (opts.near != null && opts.near !== "") {
     // Cleaned the same way stored names are (control characters, length), and runs of spaces count as one.
     const squash = (t: string) => cleanName(t).replace(/\s+/g, " ").toLowerCase();
     const want = squash(opts.near);
+    // Only spaces or control characters would match rooms with no name or id: never a search (Codex review, 11/25).
+    if (!want.trim()) return { ...base, summary: "The room or place to search near is blank. Give a room's name or id, or a place like a floor, or ask without one to see free rooms anywhere.", couldNotCheck };
     const byId = rooms.filter((r) => squash(idOf(r)) === want);
     const byName = rooms.filter((r) => squash(str(r.name)) === want);
     // One room by its id and another by its name: never pick one silently, ask which (by id).
@@ -104,8 +114,15 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
     nearFree = isFreeNow(r);
     nearNoHealth = str(r.health) ? "" : " (Zoom gives no health)";
-    // A room with no Zoom location has no "same location": say so rather than guess a floor.
-    if (!near.location) return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary: `${nearFree ? `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}, but it` : near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`, couldNotCheck };
+    // A room with no Zoom location has no "same location": say so rather than guess a floor. Its own seats are still
+    // looked up for a meeting size, and the calendar reminder still applies to it (Codex review, 11/25).
+    if (!near.location) {
+      const own = nearFree ? await ownFit(near) : "";
+      const summary = nearFree
+        ? `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}${own}, but it has no Zoom location, so no other room can be called nearby. Ask without a room to see free rooms anywhere.\n\n${CALENDAR}`
+        : `${near.name} has no Zoom location, so no room can be called nearby. Ask without a room to see free rooms anywhere.`;
+      return { ...base, near: { id: near.id, name: near.name, free: nearFree }, summary, couldNotCheck };
+    }
     }
   }
 
@@ -116,14 +133,10 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;
   // With a meeting size, the named room's own seats are looked up too, so "free" never reads as "fits".
   let itself = "";
-  if (near && nearFree) {
-    // A room with no Zoom id has no room profile to read: its seats are said as unknown, never looked up with an empty id.
-    const own = attendees != null && near.id ? (await lookUpFits(client, [near.id], attendees))[0]! : null;
-    const unknown = attendees != null && !near.id ? " (its seats can't be looked up: it has no Zoom id)" : "";
-    itself = `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}${own ? ` (${own.text})` : unknown}. `;
-  }
+  if (near && nearFree) itself = `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}${await ownFit(near)}. `;
   if (!free.length) {
-    const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}`;
+    // The named room itself free is still a room to check the calendar of (Codex review, 11/25).
+    const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}${itself ? `\n\n${CALENDAR}` : ""}`;
     return { ...base, near: nearOut, ...placeOut, summary, couldNotCheck };
   }
 
@@ -146,7 +159,13 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   const ofLooked = rest.length ? ` of the ${looked.length} looked up (the first by name)` : "";
   let head: string;
   if (attendees == null) {
-    head = `${plural(free.length, "room is", "rooms are")} free and healthy${where} right now.`;
+    // Rooms Zoom gives no health for are free, not known healthy (Codex review, 11/25).
+    const noHealth = free.filter((r) => r.name.includes("(Zoom gives no health)")).length;
+    head = !noHealth
+      ? `${plural(free.length, "room is", "rooms are")} free and healthy${where} right now.`
+      : noHealth === free.length
+        ? `${plural(free.length, "room is", "rooms are")} free${where} right now (Zoom gives no health for ${free.length === 1 ? "it" : "them"}).`
+        : `${plural(free.length, "room is", "rooms are")} free${where} right now: ${free.length - noHealth} healthy, ${noHealth} with no health from Zoom.`;
     if (rest.length) head += ` Seats were looked up for the first ${looked.length} by name.`;
   } else {
     const ok = out.filter((r) => r.fit === "fits");
