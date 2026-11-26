@@ -161,3 +161,56 @@ test("review: the first room-list page and the token never run past the reading'
     globalThis.fetch = real;
   }
 });
+
+const routedFetch = (routes: [RegExp, number, unknown][]) =>
+  (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("oauth/token")) return new Response(JSON.stringify({ access_token: "t", token_type: "bearer", expires_in: 3600 }));
+    const hit = routes.find(([re]) => re.test(u));
+    if (!hit) return new Response("no route", { status: 404 });
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, hit[1]);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(t);
+        reject(init.signal!.reason ?? new DOMException("aborted", "AbortError"));
+      });
+    });
+    return new Response(JSON.stringify(typeof hit[2] === "function" ? (hit[2] as (u: string) => unknown)(u) : hit[2]));
+  }) as typeof fetch;
+
+test("review: list_zoom_rooms over many slow pages returns the rooms it read, marked not whole, instead of a timeout", async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = slowPagesFetch(150, 20);
+  try {
+    const c = await connect(new HttpZoomRoomsClient({ accountId: "a-list", clientId: "c", clientSecret: "s" }), 1_000);
+    const t0 = Date.now();
+    const r = (await c.callTool({ name: "list_zoom_rooms", arguments: {} })) as Result;
+    assert.ok(Date.now() - t0 < 1_000, "did not answer within the budget");
+    assert.notEqual(r.isError, true, r.content[0]!.text);
+    const data = r.structuredContent.data;
+    assert.ok(data.rooms.length > 0, "no rooms came back");
+    assert.ok(data.next_page_token, "a cut-short list must keep Zoom's next_page_token");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("review: diagnose_room keeps its diagnosis when the fallback room-list lookup would run past the budget", async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = routedFetch([
+    [/\/rooms\/s0\/devices/, 300, { devices: [{ name: "Controller", device_type: "Controller", status: "Offline" }] }],
+    [/\/rooms\/s0$/, 300, { id: "s0", basic: { name: "Boardroom" }, issues: [] }],
+    [/\/rooms\?/, 400, { rooms: [{ id: "s0", name: "Boardroom", status: "Offline", health: "Critical" }], next_page_token: "" }],
+  ]);
+  try {
+    const c = await connect(new HttpZoomRoomsClient({ accountId: "a-diag", clientId: "c", clientSecret: "s" }), 500);
+    const t0 = Date.now();
+    const r = (await c.callTool({ name: "diagnose_room", arguments: { roomId: "s0" } })) as Result;
+    assert.ok(Date.now() - t0 < 600, `took ${Date.now() - t0} ms`);
+    assert.notEqual(r.isError, true, r.content[0]!.text);
+    assert.match(r.content[0]!.text, /Controller/);
+    assert.ok(r.structuredContent.couldNotCheck.some((n: string) => /room list/i.test(n)), JSON.stringify(r.structuredContent.couldNotCheck));
+  } finally {
+    globalThis.fetch = real;
+  }
+});

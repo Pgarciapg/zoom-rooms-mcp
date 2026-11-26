@@ -83,6 +83,7 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       } else {
         // The first page has no partial answer to fall back to, but it still never runs past the deadline.
         const left = opts.deadline === undefined ? ZOOM_TIMEOUT_MS : Math.min(ZOOM_TIMEOUT_MS, opts.deadline - Date.now());
+        if (left <= 0) throw new ZoomApiError(504, "Zoom was slow, so the room list was not read in time to answer.");
         last = await this.request(`/rooms?${query}`, Math.max(1, left));
       }
       const batch = (last as any)?.rooms;

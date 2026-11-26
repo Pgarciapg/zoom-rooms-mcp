@@ -97,8 +97,21 @@ export const SAVES_LOCALLY = { readOnlyHint: false, destructiveHint: false, idem
 
 export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagnose_rooms", "diagnose_room", "find_free_room", "list_zoom_rooms", "get_zoom_room", "get_zoom_room_devices"] as const;
 
+/**
+ * The client a tool call uses: every room-list read stops paging at the call's own deadline and returns what it read,
+ * marked not whole, so a slow Zoom gives a partial answer instead of a bare timeout (Codex review, 11/26).
+ */
+const timedClient = (c: ZoomRoomsClient, deadline: number): ZoomRoomsClient => ({
+  listRooms: (o) => c.listRooms({ deadline: Math.min(deadline, o?.deadline ?? Infinity) }),
+  getRoom: (id) => c.getRoom(id),
+  getRoomDevices: (id) => c.getRoomDevices(id),
+  ...(c.listLocations ? { listLocations: () => c.listLocations!() } : {}),
+});
+
 export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now, answerBudgetMs = ANSWER_BUDGET_MS }: ServerOptions): McpServer => {
   const budget = answerBudgetMs;
+  // Inner reads stop a little before the hard cap, so what they read is still sent back.
+  const zoomFor = (startedAt: number) => timedClient(client, startedAt + budget * 0.9);
   let store: SnapshotStore | null = snapshots ?? null;
   let changesQueue: Promise<unknown> = Promise.resolve();
   const accountKey = source === "demo" ? "demo" : account;
@@ -118,9 +131,9 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
     inputSchema: {},
     annotations: READ_ONLY,
   };
-  const runAttention = inTime(budget, async () => {
+  const runAttention = inTime(budget, async (_args: unknown, _late, startedAt) => {
     try {
-      const result = await roomsNeedingAttention(client);
+      const result = await roomsNeedingAttention(zoomFor(startedAt));
       // The card reads _meta.card; content and structuredContent are exactly what they are without the card.
       return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown>, _meta: { card: attentionCard(result, source) } };
     } catch (error) {
@@ -167,7 +180,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
           else throw new Error(`Could not compare: ${why}.`);
         }
         if (previous && previous.account !== accountKey) throw new Error("The saved check belongs to a different Zoom account, so nothing was compared or saved. Point ZOOM_ROOMS_STATE at a file for this account.");
-        const reading = await readAccount(client, previous, { deadline });
+        const reading = await readAccount(timedClient(client, deadline), previous, { deadline });
         const report = compare(reading, previous, t);
         let saved = save ? `This check was saved as the starting point for next time, in ${store.where}.` : "This check was not saved; the starting point is unchanged.";
         // This call already answered "too slow": never save a check nobody was shown.
@@ -209,9 +222,9 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: {},
       annotations: READ_ONLY,
     },
-    inTime(budget, async () => {
+    inTime(budget, async (_args: unknown, _late, startedAt) => {
       try {
-        const result = await diagnoseRooms(client);
+        const result = await diagnoseRooms(zoomFor(startedAt));
         return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
@@ -230,9 +243,9 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       },
       annotations: READ_ONLY,
     },
-    inTime(budget, async ({ roomId, attendees }: { roomId: string; attendees?: number }) => {
+    inTime(budget, async ({ roomId, attendees }: { roomId: string; attendees?: number }, _late, startedAt) => {
       try {
-        const result = await diagnoseRoom(client, roomId, undefined, undefined, undefined, { moveTo: true, attendees });
+        const result = await diagnoseRoom(zoomFor(startedAt), roomId, undefined, undefined, undefined, { moveTo: true, attendees });
         return { content: [{ type: "text" as const, text: diagnosisText(result) }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
@@ -251,9 +264,9 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       },
       annotations: READ_ONLY,
     },
-    inTime(budget, async ({ attendees, near }: { attendees?: number; near?: string }) => {
+    inTime(budget, async ({ attendees, near }: { attendees?: number; near?: string }, _late, startedAt) => {
       try {
-        const result = await findFreeRoom(client, { attendees, near });
+        const result = await findFreeRoom(zoomFor(startedAt), { attendees, near });
         return { content: [{ type: "text" as const, text: result.summary }], structuredContent: { source, ...result } as Record<string, unknown> };
       } catch (error) {
         return fail(error);
@@ -269,7 +282,7 @@ export const createServer = ({ client, source, cardHtml: cardOption, snapshots, 
       inputSchema: {},
       annotations: READ_ONLY,
     },
-    inTime(budget, guard(() => client.listRooms(), source)),
+    inTime(budget, (args: unknown, _late, startedAt) => guard(() => zoomFor(startedAt).listRooms(), source)(args)),
   );
 
   server.registerTool(
