@@ -214,3 +214,25 @@ test("review: diagnose_room keeps its diagnosis when the fallback room-list look
     globalThis.fetch = real;
   }
 });
+
+test("review: diagnose_rooms on a slow account answers with the rooms it could read and names the rest, not a bare timeout", async () => {
+  // Fast list; most rooms answer quickly, two rooms' reads would take far past the budget.
+  const rooms = Array.from({ length: 6 }, (_, i) => ({ id: `d${i}`, name: `Desk ${i}`, status: "Offline", health: "Critical" }));
+  const slow = new Set(["d4", "d5"]);
+  const read = async (id: string, v: unknown) => {
+    await wait(slow.has(id) ? 5_000 : 20);
+    return v;
+  };
+  const client: ZoomRoomsClient = {
+    listRooms: async () => ({ rooms, next_page_token: "" }),
+    getRoom: (id) => read(id, { id, issues: [] }),
+    getRoomDevices: (id) => read(id, { devices: [{ name: "Controller", device_type: "Controller", status: "Offline" }] }),
+    listLocations: () => new Promise((r) => setTimeout(() => r({ locations: [] }), 5_000)),
+  };
+  const c = await connect(client, 600);
+  const t0 = Date.now();
+  const r = (await c.callTool({ name: "diagnose_rooms", arguments: {} })) as Result;
+  assert.ok(Date.now() - t0 < 700, `took ${Date.now() - t0} ms`);
+  assert.notEqual(r.isError, true, r.content[0]!.text);
+  assert.match(JSON.stringify(r.structuredContent), /not read in time/);
+});

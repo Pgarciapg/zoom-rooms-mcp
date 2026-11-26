@@ -8,7 +8,7 @@ import { MAX_ATTENDEES } from "./move-to.ts";
 import { diagnoseRooms } from "./diagnose-rooms.ts";
 import { findFreeRoom } from "./free-room.ts";
 import { CARD_HTML } from "./generated/card.ts";
-import { EarlierDemoZoomRoomsClient, type ZoomRoomsClient } from "./client.ts";
+import { EarlierDemoZoomRoomsClient, ZoomApiError, type ZoomRoomsClient } from "./client.ts";
 import { compare, DETAIL_BUDGET_MS, defaultSnapshotPath, FileSnapshotStore, MemorySnapshotStore, nextSnapshot, readAccount, type Snapshot, type SnapshotStore } from "./changes.ts";
 import { CARD_URI, SERVER_NAME, SERVER_VERSION } from "./version.ts";
 
@@ -101,12 +101,25 @@ export const TOOL_NAMES = ["get_rooms_needing_attention", "what_changed", "diagn
  * The client a tool call uses: every room-list read stops paging at the call's own deadline and returns what it read,
  * marked not whole, so a slow Zoom gives a partial answer instead of a bare timeout (Codex review, 11/26).
  */
-const timedClient = (c: ZoomRoomsClient, deadline: number): ZoomRoomsClient => ({
-  listRooms: (o) => c.listRooms({ deadline: Math.min(deadline, o?.deadline ?? Infinity) }),
-  getRoom: (id) => c.getRoom(id),
-  getRoomDevices: (id) => c.getRoomDevices(id),
-  ...(c.listLocations ? { listLocations: () => c.listLocations!() } : {}),
-});
+const timedClient = (c: ZoomRoomsClient, deadline: number): ZoomRoomsClient => {
+  // Every other read fails with a clear "ran out of time" once the deadline passes, so the tool's own "could not
+  // read" paths turn it into a partial answer instead of the whole call hitting the hard cap (Sonnet review, 11/26).
+  const by = <T>(what: string, read: () => Promise<T>): Promise<T> => {
+    const left = deadline - Date.now();
+    const outOfTime = () => new ZoomApiError(504, `Zoom was slow, so ${what} was not read in time to answer.`);
+    if (left <= 0) return Promise.reject(outOfTime());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const work = read();
+    work.catch(() => undefined);
+    return Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(outOfTime()), left)))]).finally(() => clearTimeout(timer));
+  };
+  return {
+    listRooms: (o) => c.listRooms({ deadline: Math.min(deadline, o?.deadline ?? Infinity) }),
+    getRoom: (id) => by("the room's details", () => c.getRoom(id)),
+    getRoomDevices: (id) => by("the room's devices", () => c.getRoomDevices(id)),
+    ...(c.listLocations ? { listLocations: () => by("the location list", () => c.listLocations!()) } : {}),
+  };
+};
 
 export const createServer = ({ client, source, cardHtml: cardOption, snapshots, account, now = Date.now, answerBudgetMs = ANSWER_BUDGET_MS }: ServerOptions): McpServer => {
   const budget = answerBudgetMs;
