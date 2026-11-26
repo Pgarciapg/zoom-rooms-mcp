@@ -3,6 +3,7 @@
 // in it right now, and a plain next step. Read-only: it only calls listRooms, getRoom and getRoomDevices, plus listLocations to name a place
 // Zoom gives only as a location code. Anything it
 // could not read is listed apart, and it never reports all clear while something could not be read.
+import { alertsNote, devicesClearLine } from "./all-clear.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
 import { allocateMoveTo, besideRoom, cleanName, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
@@ -57,6 +58,8 @@ export interface Attention {
   notReadInDetail: string[];
   couldNotCheck: string[];
   allClear: boolean;
+  /** Every room up and every device read online; the only gap is that Zoom's room profile gave no alerts for some rooms. */
+  devicesClear: boolean;
   /** Why any place shows a Zoom location code instead of a name, or null. Never affects allClear. */
   placeNote: string | null;
 }
@@ -111,7 +114,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     if (typeof (list as any)?.next_page_token === "string" && (list as any).next_page_token) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, placeNote: null };
+    return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };
   }
 
   const unknownHealth = rooms.filter((r) => !levelOf(r) && !/^healthy$/i.test(str(r.health)));
@@ -122,6 +125,8 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     .sort((a, b) => (a.level === b.level ? Number(str(b.r.status).toLowerCase() === "offline") - Number(str(a.r.status).toLowerCase() === "offline") : a.level === "critical" ? -1 : 1));
 
   const places = new PlaceNamer(client);
+  // How each room's own reads went, for the no-health rooms read below.
+  const readOk = new Map<string, { clean: boolean; noAlerts: boolean }>();
   const readOne = async ({ r, level }: { r: any; level: Level }): Promise<AttentionRoom> => {
       const id = str(r.id);
       const name = str(r.name) || id;
@@ -142,6 +147,10 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       // A location code gets its name from Zoom's location tree (read once per call, only when needed).
       const code = str(detail?.location_id) || str(r.location_id);
       const where = fromDetail || (code ? await places.name(code) : null);
+      readOk.set(id, {
+        clean: !!detail && typeof detail === "object" && devices.length > 0 && (detail.issues == null || Array.isArray(detail.issues)),
+        noAlerts: !!detail && typeof detail === "object" && !("issues" in detail),
+      });
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null, age: i.since ? ago(str(i.since), now) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${deviceName(d) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);
       const base = { status: str(r.status), issues, devices: bad, lastOnline: detail?.last_online ? str(detail.last_online) : null };
@@ -158,8 +167,19 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   // device down or an open issue, so it is read too, with whatever room is left under the limit.
   const quiet = rooms.filter((r) => !levelOf(r) && !str(r.health) && UP_STATUS.test(str(r.status)) && str(r.id));
   const spare = Math.max(0, limit - detailed.length);
+  let alertsUnread = 0;
   for (const room of await Promise.all(quiet.slice(0, spare).map((r) => readOne({ r, level: "warning" })))) {
-    if (!room.devices.length && !room.issues.length) continue;
+    if (!room.devices.length && !room.issues.length) {
+      // Read cleanly with every device online: its health comes from that reading (11/26: allClear was never true on
+      // a real account). A profile without alerts is named once below; a failed read keeps it unclassed.
+      const how = readOk.get(room.id);
+      const q = quiet.find((x) => str(x.id) === room.id);
+      if (how?.clean && q && unknownHealth.includes(q)) {
+        unknownHealth.splice(unknownHealth.indexOf(q), 1);
+        if (how.noAlerts) alertsUnread++;
+      }
+      continue;
+    }
     if (room.issues.some((i) => /^critical$/i.test(i.severity))) room.level = "critical";
     const r = quiet.find((q) => str(q.id) === room.id)!;
     problems.push({ r, level: room.level });
@@ -167,6 +187,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     if (unknownHealth.includes(r)) unknownHealth.splice(unknownHealth.indexOf(r), 1);
   }
   if (quiet.length > spare) couldNotCheck.push(`${quiet.length - spare} more ${quiet.length - spare === 1 ? "room" : "rooms"} with no health from Zoom ${quiet.length - spare === 1 ? "was" : "were"} not read (past the limit of ${limit} rooms read per call).`);
+  if (alertsUnread) couldNotCheck.push(alertsNote(alertsUnread));
   for (const r of unknownHealth) couldNotCheck.push(`${str(r.name) || str(r.id)}: health is "${str(r.health) || "not reported"}", so it could not be classed as healthy.`);
   // Within a level: offline first, then the oldest open issue first.
   const firstSince = (room: AttentionRoom) => room.issues.map((i) => i.since ?? "~").sort()[0] ?? "~";
@@ -181,8 +202,10 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   const hidden = problems.length - detailed.length;
   const notReadInDetail = problems.slice(limit).map((p) => str(p.r.name) || str(p.r.id));
   const allClear = problems.length === 0 && couldNotCheck.length === 0;
+  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread > 0 && couldNotCheck.length === 1;
   const lines: string[] = [];
   if (allClear) lines.push(`All ${rooms.length} rooms are healthy and none is offline.`);
+  else if (devicesClear) lines.push(devicesClearLine(rooms.length, alertsUnread));
   else if (problems.length === 0) lines.push(`No room reports a problem, but not everything could be read, so this is not an all-clear.`);
   else {
     const parts = [counts.critical ? `${counts.critical} critical` : "", counts.warning ? `${counts.warning} warning` : ""].filter(Boolean).join(", ");
@@ -203,5 +226,5 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
   const placeNote = places.note();
   if (placeNote) lines.push("", placeNote);
-  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear, placeNote };
+  return { summary: lines.join("\n"), total: rooms.length, needAttention: problems.length, counts, rooms: detailed, notReadInDetail, couldNotCheck, allClear, devicesClear, placeNote };
 };

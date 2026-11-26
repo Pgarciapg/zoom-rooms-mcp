@@ -11,6 +11,7 @@
 // "no shared cause" without saying which rooms it did not get to.
 import { cleanName } from "./move-to.ts";
 import { levelOf } from "./attention.ts";
+import { alertsNote, devicesClearLine, NO_ALERTS } from "./all-clear.ts";
 import type { ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
 import { diagnoseRoom, FAILURE, UP_STATUS, type FindingLevel, type RoomDiagnosis } from "./diagnose.ts";
@@ -50,6 +51,11 @@ export interface RoomsDiagnosis {
   notDiagnosed: string[];
   couldNotCheck: string[];
   allClear: boolean;
+  /**
+   * Every room is up and every device read is online, with the only gap that Zoom's room profile carries no alerts for
+   * some rooms. Never true when allClear is; says the account looks fine as far as Zoom lets it be read.
+   */
+  devicesClear: boolean;
   /** Why any place shows a Zoom location code instead of a name, or null. Never affects allClear. */
   placeNote: string | null;
 }
@@ -218,7 +224,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     if (str(all?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, placeNote: null };
+    return { summary: `Could not read the room list, so the rooms could not be diagnosed: ${reason}. This is not an all-clear.`, view: "rooms-diagnosis", total: 0, needAttention: 0, patterns: [], rooms: [], notDiagnosed: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };
   }
 
   // A room listed twice is one room.
@@ -248,12 +254,19 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const spare = Math.max(0, limit - diagnoses.length);
   const probed = await Promise.all(quiet.slice(0, spare).map((r) => diagnoseRoom(client, str(r.id) || str(r.room_id), now, r, places).then((d) => ({ r, d }))));
   const probeFailed: { r: any; why: string }[] = [];
+  // Read with every device online, but Zoom's profile had no alerts list (the documented profile never does).
+  const alertsUnread: any[] = [];
   for (const { r, d } of probed) {
     // diagnoseRoom always notes the missing health; that is why the room was read, so it is not repeated here.
     const gaps = d.couldNotCheck.filter((c) => !/^Health: "not reported"/.test(c));
     if (!d.findings.length) {
-      // Read cleanly: it stays among the rooms Zoom gives no health for. A failed read says what failed instead.
-      if (!d.room || gaps.length) {
+      // Read cleanly (devices online, open issues read and none open): its health comes from that reading, so it is
+      // not listed as unclassed (11/26: on a real account allClear was never true). Missing alerts are named once.
+      if (d.room && gaps.length && gaps.every((g) => NO_ALERTS.test(g))) {
+        alertsUnread.push(r);
+        unclassed = unclassed.filter((u) => u !== r);
+      } else if (d.room && !gaps.length) unclassed = unclassed.filter((u) => u !== r);
+      else {
         probeFailed.push({ r, why: d.room ? `part of it could not be read (${gaps.join("; ")})` : `it could not be read (${d.summary})` });
         unclassed = unclassed.filter((u) => u !== r);
       }
@@ -290,6 +303,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     else couldNotCheck.push(`${label}: status is "${str(r.status) || "not reported"}", so the room computer could not be classed as up.`);
   }
   for (const { r, why } of probeFailed) couldNotCheck.push(`${labelOf(str(r.name) || idOf(r), idOf(r))}: Zoom gives no health and ${why}.`);
+  if (alertsUnread.length) couldNotCheck.push(alertsNote(alertsUnread.length));
   couldNotCheck.push(...probeNotes);
   const notDiagnosed = problems.slice(limit).map(({ r }) => labels.get(idOf(r))!);
   const patterns = findPatterns(diagnoses);
@@ -312,9 +326,11 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const caveat = unseen ? ` ${plural(unseen, "problem room")} could not be included (${[notDiagnosed.length ? `${notDiagnosed.length} past the limit` : "", unread ? `${unread} could not be read` : ""].filter(Boolean).join(", ")}), so a shared cause involving ${unseen === 1 ? "it" : "them"} would not show here.` : "";
 
   const allClear = rooms.length > 0 && problems.length === 0 && couldNotCheck.length === 0;
+  const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread.length > 0 && couldNotCheck.length === 1;
   const lines: string[] = [];
   if (rooms.length === 0) lines.push(`The account has no rooms to diagnose${couldNotCheck.length ? " that could be read" : ""}. This is not an all-clear: there is nothing to check.`);
   else if (allClear) lines.push(rooms.length === 1 ? "The 1 room is healthy and not offline." : `All ${rooms.length} rooms are healthy and none is offline.`);
+  else if (devicesClear) lines.push(devicesClearLine(rooms.length, alertsUnread.length));
   else if (problems.length === 0) lines.push("No room reports a problem, but not everything could be read, so this is not an all-clear.");
   else {
     const head = `${problems.length} of ${plural(rooms.length, "room")} ${problems.length === 1 ? "needs" : "need"} attention.`;
@@ -335,5 +351,5 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   }
   if (couldNotCheck.length) lines.push("", "Could not check:", ...couldNotCheck.map((c) => `- ${c}`));
   if (placeNote) lines.push("", placeNote);
-  return { summary: lines.join("\n"), view: "rooms-diagnosis", total: rooms.length, needAttention: problems.length, patterns, rooms: rows, notDiagnosed, couldNotCheck, allClear, placeNote };
+  return { summary: lines.join("\n"), view: "rooms-diagnosis", total: rooms.length, needAttention: problems.length, patterns, rooms: rows, notDiagnosed, couldNotCheck, allClear, devicesClear, placeNote };
 };

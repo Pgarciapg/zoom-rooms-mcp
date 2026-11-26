@@ -15,19 +15,24 @@ const client = (rows: any[]): ZoomRoomsClient => ({
   // Only the Warning rooms have an open issue: since 11/25 diagnose_rooms also reads up rooms with no health, and a
   // quiet one (no issue, its devices online) stays unclassed, which is what these naming tests look at.
   getRoom: async (id) => ({ id, name: rows.find((r) => r.id === id)?.name, issues: rows.find((r) => r.id === id)?.health === "Warning" ? [{ issue: "Display disconnected", severity: "warning" }] : [] }),
-  getRoomDevices: async () => ({ devices: [{ name: "Controller", device_type: "Controller", status: "Online" }] }),
+  // Since 11/26 a no-health room read cleanly counts as checked, so here its device read fails: it stays in the answer.
+  getRoomDevices: async (id) => {
+    const r = rows.find((x) => (x.id ?? x.room_id) === id);
+    if (r && !r.health) throw new Error("Zoom API 500");
+    return { devices: [{ name: "Controller", device_type: "Controller", status: "Online" }] };
+  },
 });
 const lines = (d: { couldNotCheck: string[] }) => d.couldNotCheck.join(" | ");
 
 test("two unclassed rooms with one name are told apart", async () => {
   const d = await diagnoseRooms(client([unknown("u1", "Lobby"), unknown("u2", "Lobby", "Pending")]), NOW);
-  assert.ok(d.couldNotCheck.some((c) => c.startsWith('Lobby (Zoom room u1): health is "not reported"')), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room u1): Zoom gives no health")), lines(d));
   assert.ok(d.couldNotCheck.some((c) => c.startsWith('Lobby (Zoom room u2): health is "Pending"')), lines(d));
 });
 
 test("an unclassed room and a problem room with one name are both told apart", async () => {
   const d = await diagnoseRooms(client([unknown("u1", "Lobby"), problem("p1", "Lobby")]), NOW);
-  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room u1): health is")), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby (Zoom room u1): Zoom gives no health")), lines(d));
   assert.match(d.summary, /Lobby \(Zoom room p1\)|id p1/);
   assert.ok(!d.couldNotCheck.some((c) => c.startsWith("Lobby: ")), lines(d));
 });
@@ -40,12 +45,12 @@ test("an unclassed room whose status is odd is told apart too", async () => {
 
 test("a healthy twin does not add an id: only rooms named in the answer count", async () => {
   const d = await diagnoseRooms(client([unknown("u1", "Lobby"), healthy("h1", "Lobby")]), NOW);
-  assert.ok(d.couldNotCheck.some((c) => c.startsWith('Lobby: health is "not reported"')), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby: Zoom gives no health")), lines(d));
 });
 
 test("a single unclassed room reads as before", async () => {
   const d = await diagnoseRooms(client([unknown("u1", "Lobby"), problem("p1", "Atrium")]), NOW);
-  assert.ok(d.couldNotCheck.some((c) => c.startsWith('Lobby: health is "not reported"')), lines(d));
+  assert.ok(d.couldNotCheck.some((c) => c.startsWith("Lobby: Zoom gives no health")), lines(d));
 });
 
 // From the Sonnet review (2026-11-24).
