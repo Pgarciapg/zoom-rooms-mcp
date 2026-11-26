@@ -271,3 +271,10 @@ test("review: offline rooms with the same building and floor text but different 
   const d2 = await diagnoseRooms(account(rows, same, { a: ok, b: ok }), NOW);
   assert.ok(d2.patterns.some((p) => p.kind === "location-offline"), JSON.stringify(d2.patterns.map((p) => p.title)));
 });
+
+test("review: rooms on two floors under one building code are not one floor's outage", async () => {
+  const rows = [row("a", "Offline", "Critical"), row("b", "Offline", "Critical")];
+  const details = { a: detail("a", { location: { building: "Building 1", floor: "2nd Floor" }, location_id: "BLDG" }), b: detail("b", { location: floor4, location_id: "BLDG" }) };
+  const d = await diagnoseRooms(account(rows, details, { a: ok, b: ok }), NOW);
+  assert.ok(!d.patterns.some((p) => p.kind === "location-offline"), JSON.stringify(d.patterns.map((p) => p.title)));
+});
