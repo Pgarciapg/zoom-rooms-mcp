@@ -245,3 +245,28 @@ test("a documented device row keeps its name and firmware, and a profile's basic
   assert.deepEqual(d.devices.map((x) => [x.name, x.firmware]), [["Panel", "1.2"]]);
   assert.match(d.findings.map((f) => f.subject).join("|"), /Panel \(Controller\)/);
 });
+
+// Codex review of b4974a8 (MEDIUMs, 11/25).
+test("review: a firmware-update alert that names a disconnected device is not given as the outage's cause", async () => {
+  const d = await diagnoseRoom(
+    fake(room({ health: "Critical", issues: [{ issue: "Logitech Rally firmware update available", severity: "critical" }] }), [{ name: "Logitech Rally", device_type: "Camera", status: "Disconnected" }]),
+    "r1",
+    NOW,
+  );
+  const dev = d.findings.find((f) => f.subject.startsWith("Logitech Rally (Camera)"));
+  assert.ok(dev, JSON.stringify(d.findings));
+  assert.doesNotMatch(dev!.detail, /firmware update/);
+  assert.ok(d.findings.some((f) => f.subject === "Logitech Rally firmware update available"), JSON.stringify(d.findings.map((f) => f.subject)));
+});
+
+test("review: a Critical room whose only finding is a device warning still says Critical", async () => {
+  const d = await diagnoseRoom(fake(room({ health: "Critical" }), [{ name: "Ceiling Mic", device_type: "Microphone", status: "Offline" }]), "r1", NOW);
+  assert.ok(d.findings.some((f) => f.level === "critical" && f.subject === "Health is Critical"), JSON.stringify(d.findings));
+  assert.match(d.summary, /1 critical, 1 warning/);
+});
+
+test("review: a disconnected device and an issue that says it failed are still one finding", async () => {
+  const d = await diagnoseRoom(fake(room({ health: "Critical", issues: [{ issue: "Logitech Rally disconnected", severity: "critical" }] }), [{ name: "Logitech Rally", device_type: "Camera", status: "Disconnected" }]), "r1", NOW);
+  assert.equal(d.findings.length, 1, JSON.stringify(d.findings));
+  assert.equal(d.findings[0]!.level, "critical");
+});

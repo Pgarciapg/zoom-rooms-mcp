@@ -236,7 +236,9 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   for (const device of failing) {
     // Pass 1: an issue that names this device. Pass 2: an issue that says this kind of device stopped working.
     const free = (i: number) => !usedIssues.has(i);
-    let matchIdx = issues.findIndex((issue, i) => free(i) && namesDevice(issue.issue, device));
+    // Only an issue that says the device stopped working explains the outage: "Logitech Rally firmware update available"
+    // names the device but stays its own finding (Codex review, 11/25).
+    let matchIdx = issues.findIndex((issue, i) => free(i) && namesDevice(issue.issue, device) && FAILURE.test(issue.issue));
     if (matchIdx < 0) matchIdx = issues.findIndex((issue, i) => free(i) && namesKind(issue.issue, device) && !failingNamedElsewhere(issue.issue, device));
     const match = matchIdx >= 0 ? issues[matchIdx]! : null;
     if (match) usedIssues.add(matchIdx);
@@ -274,6 +276,17 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
       check: GENERIC_ISSUE_CHECK,
     });
   }
+
+  // Zoom says Critical but nothing found is critical: say so, never let the room read as only a warning (Codex review,
+  // 11/25). Zoom's own level is reported; the findings are not re-graded on a guess.
+  if (findings.length && /^critical$/i.test(room.health) && !findings.some((f) => f.level === "critical"))
+    findings.push({
+      level: "critical",
+      subject: "Health is Critical",
+      detail: "Zoom reports Critical health for this room, but nothing found below is rated critical, so they may not explain all of it.",
+      since: null,
+      check: GENERIC_ISSUE_CHECK,
+    });
 
   // Worst first: the offline room computer, then critical, then warning; oldest first within a level.
   const rank = (f: RoomFinding) => (f.subject === "Room computer offline" ? 0 : f.level === "critical" ? 1 : 2);
