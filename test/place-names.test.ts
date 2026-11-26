@@ -269,3 +269,18 @@ test("review HTTP: a non-array locations page is an honest error", async (t) => 
   serve(t, [() => new Response(JSON.stringify({ locations: { id: "x" } }), { status: 200 })]);
   await assert.rejects(new HttpZoomRoomsClient(creds()).listLocations(), /page 1 of the location list in an unexpected shape/);
 });
+
+// Codex review of b4974a8 (MEDIUM, 11/25): Zoom documents the account id as the country's parent, and it is never a
+// location row, so every live tree read as cut short.
+test("review: a tree whose country's parent is the account id is whole, not partial", async () => {
+  const { placeName } = await import("../src/locations.ts");
+  const rows = TREE.map((r) => (r.type === "country" ? { ...r, parent_location_id: "ACCOUNT-ID" } : r));
+  const tree = new Map(rows.map((r) => [r.id, { name: r.name, parent: r.parent_location_id, type: r.type }]));
+  assert.deepEqual(placeName(tree, F4), { name: "Building 1, 4th Floor", cut: false });
+  // A chain that stops below the top (its building's row is missing) is still cut.
+  const noBuilding = new Map([...tree].filter(([id]) => id !== "B1"));
+  assert.equal(placeName(noBuilding, F4).cut, true);
+  // End to end: no "partial" note on a live-shaped account.
+  const d = await diagnoseRooms(account([offline("a", F4), offline("b", F4)], { locations: async () => ({ locations: rows, next_page_token: "" }) }).client, NOW);
+  assert.equal(d.placeNote, null, d.placeNote ?? "");
+});

@@ -39,7 +39,10 @@ export const placeName = (tree: Map<string, LocationRow>, id: string): { name: s
     chain.push(row);
     at = row.parent;
   }
-  const cut = Boolean(at) && !tree.has(at);
+  // A country is Zoom's top level, and its parent is the account id, which is never a location row (Codex review, 11/25):
+  // a chain that reaches a country is whole, not cut.
+  const top = chain.at(-1);
+  const cut = Boolean(at) && !tree.has(at) && !(top && /^countr(y|ies)$/i.test(top.type));
   const named = chain.filter((r) => r.name);
   const site = named.filter((r) => !REGION.test(r.type));
   // The two closest levels read best ("Building 1, 4th Floor"); the code, not the name, keeps places apart.
