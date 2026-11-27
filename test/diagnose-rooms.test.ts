@@ -295,5 +295,7 @@ test("review: an Offline room listed with only room_id is diagnosed by that id",
   const d = await diagnoseRooms(account(rows, { z9: detail("z9") }, { z9: ok }, { getRoom: async (id) => (asked.push(id), detail(id)) }), NOW);
   assert.ok(asked.includes("z9"), JSON.stringify(asked));
   assert.ok(!asked.includes(""), JSON.stringify(asked));
-  assert.notEqual(d.rooms[0]?.level, "could_not_check");
+  assert.equal(d.rooms.length, 1);
+  assert.equal(d.rooms[0]!.id, "z9");
+  assert.notEqual(d.rooms[0]!.level, "could_not_check");
 });

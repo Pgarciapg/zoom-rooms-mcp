@@ -931,8 +931,11 @@ test("review: a room seen only in a first, partial check is not called removed b
   await call(c);
   state.rooms = rooms;
   state.nextToken = "";
-  const text = (await call(c)).content[0]!.text;
+  const r = await call(c);
+  const text = r.content[0]!.text;
+  assert.ok(!r.isError, text);
   assert.doesNotMatch(text, /No longer in the account/, text);
+  assert.match(text, /Room Nine: seen only in an earlier partial room list and not in this full one/, text);
 });
 
 test("review: the full read that confirms a new room still names its grouped devices", async () => {
