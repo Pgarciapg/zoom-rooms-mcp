@@ -255,8 +255,9 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
     seen.add(key);
     if (r.id && !shared.has(key)) ids[key] = r.id;
     if (OK_DEVICE.test(r.status)) continue;
-    // A shared key is down when any of its devices is.
-    if (!(key in down)) down[key] = r.status || "unknown";
+    // A shared key is down when any of its devices is; its status is the same whatever order Zoom lists them in.
+    const st = r.status || "unknown";
+    if (!(key in down) || st.localeCompare(down[key]!) < 0) down[key] = st;
   }
   for (const k of shared) delete ids[k];
   return {
@@ -282,10 +283,11 @@ const carryIds = <T extends RoomDetailFacts>(
   const nowKeys = new Set([...Object.keys(now_.down), ...(now_.seen ?? [])]);
   const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
   const keyById = new Map(Object.entries(now_.ids ?? {}).map(([k, id]) => [id, k]));
+  // Zoom's device id wins over the name: two devices that swapped names keep their own histories (Codex review, 11/27).
   const rename = new Map<string, string>();
   for (const [k, id] of Object.entries(was.ids ?? {})) {
     const to = keyById.get(id);
-    if (to && to !== k && !nowKeys.has(k)) rename.set(k, to);
+    if (to && to !== k) rename.set(k, to);
   }
   const skip = new Set<string>();
   const fresh = new Set<string>();
@@ -299,9 +301,14 @@ const carryIds = <T extends RoomDetailFacts>(
     const parts = [...nowKeys].filter((k) => k.startsWith(stem) && !oldKeys.has(k) && !taken.has(k));
     if (!parts.length) continue;
     if (parts.length === 1) {
-      // One same-named device was already told apart by id last time, and this one had no id then but has one now:
-      // it is the same device (Sonnet review, 11/27), never a false outage plus a "no longer listed".
-      if ([...oldKeys].some((k) => k.startsWith(stem))) rename.set(old, parts[0]!);
+      // A same-named device was already told apart by id last time, and the one with no id then is gone while a new id
+      // appeared: either it gained an id or it was replaced, and nothing tells which (Sonnet and Codex reviews, 11/27).
+      // Said once, never a false recovery or outage.
+      if ([...oldKeys].some((k) => k.startsWith(stem))) {
+        drop.add(old);
+        skip.add(parts[0]!);
+        split.push(old);
+      }
       continue;
     }
     drop.add(old);
@@ -312,6 +319,7 @@ const carryIds = <T extends RoomDetailFacts>(
       // claimed to have been online (Sonnet review, 11/27).
       for (const p of partsDown) fresh.add(p);
     } else if (!partsDown.length) {
+      // All online now, but the down device was never seen again under its old key: it may have been replaced.
       recovered.push([old, oldDown]);
     } else {
       // Down before and some down now: which one is which cannot be told, so it is said once and starts fresh.
@@ -320,9 +328,12 @@ const carryIds = <T extends RoomDetailFacts>(
     }
   }
   if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered };
+  // An old key with no saved id that another device's id now claims cannot be told apart: dropped, not guessed.
+  const targets = new Set(rename.values());
+  const gone = (k: string) => drop.has(k) || (!rename.has(k) && targets.has(k));
   const down: Record<string, string> = {};
-  for (const [k, s] of Object.entries(was.down)) if (!drop.has(k)) down[rename.get(k) ?? k] = s;
-  const seen = was.seen?.filter((k) => !drop.has(k)).map((k) => rename.get(k) ?? k);
+  for (const [k, s] of Object.entries(was.down)) if (!gone(k)) down[rename.get(k) ?? k] = s;
+  const seen = was.seen?.filter((k) => !gone(k)).map((k) => rename.get(k) ?? k);
   return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered };
 };
 
@@ -537,12 +548,14 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
         for (const i of detailNow.issues) add(nm, "worse", `New issue: ${i} (the room was healthy at the last check).`);
         for (const [d, s] of Object.entries(detailNow.down)) add(nm, "worse", `${d}: ${s} (the room was healthy at the last check).`);
       } else if (detailNow.issues.length || Object.keys(detailNow.down).length) notCompared.push(`${now_.name}: its issues and devices were not read last time, so this is their first reading`);
+      // Grouped devices are said on their first reading too (Codex review, 11/27).
+      for (const k of detailNow.shared ?? []) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
       continue;
     }
     const lined = carryIds(detailWas, detailNow);
     detailWas = carryUnnamed(lined.was, detailNow);
-    for (const k of lined.split) notCompared.push(`${now_.name}: ${k.replace(/\)$/, "")}) now names more than one device; they are told apart by Zoom device id from this check on, so they were not compared this time`);
-    for (const [k, st] of lined.recovered) add(nm, "better", `${k}: back online (was ${st}); Zoom now lists more than one device with this name, all online.`);
+    for (const k of lined.split) notCompared.push(`${now_.name}: ${k.replace(/\)$/, "")}) could not be matched to this check's devices with that name (Zoom device ids changed or were added), so they were not compared this time; they are told apart by id from now on`);
+    for (const [k, st] of lined.recovered) add(nm, "changed", `${k}: was ${st}; Zoom now lists more than one device with this name, all online (it may have been replaced, so not counted as back online).`);
     // Said when it first happens, not on every check (Sonnet review, 11/27).
     for (const k of (detailNow.shared ?? []).filter((k) => !(detailWas!.shared ?? []).includes(k))) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
     // One line for all such rooms, not one per room per check (Sonnet review, 11/25): on a live account it is all of them.
