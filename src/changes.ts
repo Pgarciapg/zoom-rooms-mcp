@@ -279,7 +279,7 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
 const carryIds = <T extends RoomDetailFacts>(
   was: T,
   now_: RoomDetailFacts,
-): { was: T; skip: Set<string>; split: string[]; fresh: Set<string>; recovered: [string, string][] } => {
+): { was: T; skip: Set<string>; split: string[]; fresh: Set<string>; recovered: [string, string][]; removed: [string, string][] } => {
   const nowKeys = new Set([...Object.keys(now_.down), ...(now_.seen ?? [])]);
   const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
   const keyById = new Map(Object.entries(now_.ids ?? {}).map(([k, id]) => [id, k]));
@@ -306,8 +306,13 @@ const carryIds = <T extends RoomDetailFacts>(
       // Said once, never a false recovery or outage.
       if ([...oldKeys].some((k) => k.startsWith(stem))) {
         drop.add(old);
-        skip.add(parts[0]!);
-        split.push(old);
+        // Online before: if the new one is down, that is news either way (Sonnet review, 11/27).
+        if (!Object.hasOwn(was.down, old)) {
+          if (Object.hasOwn(now_.down, parts[0]!)) fresh.add(parts[0]!);
+        } else {
+          skip.add(parts[0]!);
+          split.push(old);
+        }
       }
       continue;
     }
@@ -327,14 +332,19 @@ const carryIds = <T extends RoomDetailFacts>(
       split.push(old);
     }
   }
-  if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered };
+  if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered, removed: [] };
   // An old key with no saved id that another device's id now claims cannot be told apart: dropped, not guessed.
   const targets = new Set(rename.values());
   const gone = (k: string) => drop.has(k) || (!rename.has(k) && targets.has(k));
+  // A down device dropped that way whose own saved id is no longer listed has left the room: said, not swallowed.
+  const nowIds = new Set(Object.values(now_.ids ?? {}));
+  const removed: [string, string][] = Object.entries(was.down).filter(
+    ([k]) => !drop.has(k) && !rename.has(k) && targets.has(k) && was.ids?.[k] !== undefined && !nowIds.has(was.ids[k]!),
+  );
   const down: Record<string, string> = {};
   for (const [k, s] of Object.entries(was.down)) if (!gone(k)) down[rename.get(k) ?? k] = s;
   const seen = was.seen?.filter((k) => !gone(k)).map((k) => rename.get(k) ?? k);
-  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered };
+  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered, removed };
 };
 
 /**
@@ -555,6 +565,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const lined = carryIds(detailWas, detailNow);
     detailWas = carryUnnamed(lined.was, detailNow);
     for (const k of lined.split) notCompared.push(`${now_.name}: ${k.replace(/\)$/, "")}) could not be matched to this check's devices with that name (Zoom device ids changed or were added), so they were not compared this time; they are told apart by id from now on`);
+    for (const [k, st] of lined.removed) add(nm, "changed", `${k} (Zoom device ${detailWas.ids?.[k] ?? "?"}): no longer in the room's device list (was ${st}); not counted as back online.`);
     for (const [k, st] of lined.recovered) add(nm, "changed", `${k}: was ${st}; Zoom now lists more than one device with this name, all online (it may have been replaced, so not counted as back online).`);
     // Said when it first happens, not on every check (Sonnet review, 11/27).
     for (const k of (detailNow.shared ?? []).filter((k) => !(detailWas!.shared ?? []).includes(k))) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);

@@ -768,3 +768,24 @@ test("review: a first detailed reading that groups id-less devices says so", asy
   state.devices.r1 = [panel(undefined, "Offline"), panel(undefined, "Offline")];
   assert.match((await call(c)).content[0]!.text, /Room One: more than one Panel \(Controller\) and Zoom gave no device id/);
 });
+
+// Sonnet review of a95979d.
+test("review: an online id-less twin replaced by a new id'd device that is down is reported", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("p1", "Online"), panel(undefined, "Online")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
+  assert.match((await call(c)).content[0]!.text, /\[worse\] Panel \(Controller, Zoom device p2\): Offline \(at the last check/);
+});
+
+test("review: a down device that leaves while another takes its name is reported as no longer listed", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [{ id: "a", name: "A", device_type: "Controller", status: "Offline" }, { id: "b", name: "B", device_type: "Controller", status: "Offline" }];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [{ id: "a", name: "B", device_type: "Controller", status: "Offline" }];
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /B \(Controller\) \(Zoom device b\): no longer in the room's device list \(was Offline\)/, text);
+  assert.doesNotMatch(text, /\[better\]|was online/, text);
+});
