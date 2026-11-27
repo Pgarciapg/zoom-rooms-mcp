@@ -606,3 +606,46 @@ test("review: the shared-name note is said once, not on every check", async () =
   assert.match((await call(c)).content[0]!.text, /as one/);
   assert.doesNotMatch((await call(c)).content[0]!.text, /as one/);
 });
+
+// Codex review of cdd6d8e / b4974a8 (MEDIUM, changes.ts:186): deleting the last room was never reported.
+test("review: deleting the last rooms is reported once a second clean read in a row also finds none", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [];
+  const first = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(first, /No longer in the account/);
+  assert.match(first, /If the next check also finds none, the rooms are reported removed/);
+  const second = (await call(c)).content[0]!.text;
+  assert.match(second, /Room One:\n- \[changed\] No longer in the account's room list/, second);
+  assert.match(second, /Room Two:\n- \[changed\] No longer in the account's room list/, second);
+  assert.equal(Object.keys(store.load()!.rooms).length, 0);
+  assert.equal(store.load()!.emptyListAt, undefined);
+  assert.match((await call(c)).content[0]!.text, /^Nothing changed/);
+});
+
+test("review: an empty read between two full ones does not confirm a later empty read", async () => {
+  const { state, client } = fakeAccount();
+  const rooms = state.rooms;
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [];
+  await call(c);
+  state.rooms = rooms;
+  await call(c);
+  assert.equal(store.load()!.emptyListAt, undefined);
+  state.rooms = [];
+  assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
+});
+
+test("review: an empty page that still has a next-page token never confirms a deletion", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [];
+  state.nextToken = "more";
+  await call(c);
+  assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
+});
