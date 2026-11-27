@@ -80,3 +80,10 @@ test("review: a Healthy-listed room with an odd status keeps devicesClear false"
   const c = live(2, { listRooms: async () => ({ rooms: [{ id: "r0", name: "Room 0", status: "Available" }, { id: "r1", name: "Room 1", status: "Unknown", health: "Healthy" }], next_page_token: "" }) });
   for (const d of [await roomsNeedingAttention(c, 15, NOW), await diagnoseRooms(c, NOW)]) assert.equal(d.devicesClear, false, d.summary);
 });
+
+// Sonnet review of f1e7dc7: a profile with `issues: null` gives the same honest "devices clear" answer.
+test("diagnose_rooms: profiles with issues: null still give the devices-clear answer", async () => {
+  const d: any = await diagnoseRooms(live(3, { getRoom: async (id) => ({ id, basic: { name: id }, issues: null }) }), NOW);
+  assert.equal(d.allClear, false);
+  assert.equal(d.devicesClear, true, d.summary);
+});
