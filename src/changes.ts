@@ -265,7 +265,10 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
  * its saved id. A check saved before ids were kept cannot say which of two same-named devices was which: those are
  * named once as not compared and start fresh, never reported as "was online" or "no longer listed".
  */
-const carryIds = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts): { was: T; skip: Set<string>; split: string[] } => {
+const carryIds = <T extends RoomDetailFacts>(
+  was: T,
+  now_: RoomDetailFacts,
+): { was: T; skip: Set<string>; split: string[]; fresh: Set<string>; recovered: [string, string][] } => {
   const nowKeys = new Set([...Object.keys(now_.down), ...(now_.seen ?? [])]);
   const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
   const keyById = new Map(Object.entries(now_.ids ?? {}).map(([k, id]) => [id, k]));
@@ -275,22 +278,42 @@ const carryIds = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts): { w
     if (to && to !== k && !nowKeys.has(k)) rename.set(k, to);
   }
   const skip = new Set<string>();
+  const fresh = new Set<string>();
   const split: string[] = [];
+  const recovered: [string, string][] = [];
   const drop = new Set<string>();
   for (const old of oldKeys) {
     if (nowKeys.has(old) || rename.has(old) || !old.endsWith(")")) continue;
     const stem = `${old.slice(0, -1)}, Zoom device `;
-    const parts = [...nowKeys].filter((k) => k.startsWith(stem) && !oldKeys.has(k) && ![...rename.values()].includes(k));
-    if (parts.length < 2) continue;
+    const taken = new Set(rename.values());
+    const parts = [...nowKeys].filter((k) => k.startsWith(stem) && !oldKeys.has(k) && !taken.has(k));
+    if (!parts.length) continue;
+    if (parts.length === 1) {
+      // One same-named device was already told apart by id last time, and this one had no id then but has one now:
+      // it is the same device (Sonnet review, 11/27), never a false outage plus a "no longer listed".
+      if ([...oldKeys].some((k) => k.startsWith(stem))) rename.set(old, parts[0]!);
+      continue;
+    }
     drop.add(old);
-    for (const p of parts) skip.add(p);
-    split.push(old);
+    const oldDown = Object.hasOwn(was.down, old) ? was.down[old]! : undefined;
+    const partsDown = parts.filter((p) => Object.hasOwn(now_.down, p));
+    if (oldDown === undefined) {
+      // It was one device and online: any of them down now is news, worded so a just-installed device is not
+      // claimed to have been online (Sonnet review, 11/27).
+      for (const p of partsDown) fresh.add(p);
+    } else if (!partsDown.length) {
+      recovered.push([old, oldDown]);
+    } else {
+      // Down before and some down now: which one is which cannot be told, so it is said once and starts fresh.
+      for (const p of parts) skip.add(p);
+      split.push(old);
+    }
   }
-  if (!rename.size && !drop.size) return { was, skip, split };
+  if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered };
   const down: Record<string, string> = {};
   for (const [k, s] of Object.entries(was.down)) if (!drop.has(k)) down[rename.get(k) ?? k] = s;
   const seen = was.seen?.filter((k) => !drop.has(k)).map((k) => rename.get(k) ?? k);
-  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split };
+  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered };
 };
 
 /**
@@ -429,6 +452,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   const issuesUnread: string[] = [];
   const notCompared = [...reading.couldNotCheck, ...reading.skippedDetail.map((n) => `${n}: past the ${DETAIL_LIMIT}-room detail limit, so its issues and devices were not compared`)];
   if (!previous) {
+    for (const [id, d] of reading.details) for (const k of d.shared ?? []) notCompared.push(`${reading.rooms.get(id)?.name ?? id}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
     const summary = "No previous check to compare against.";
     // What this first check could not read is said now, not only in the structured output (Codex review, 11/25), so
     // the saved starting point is never taken as complete when it is not.
@@ -436,6 +460,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const firstWords = (n: string) =>
       n
         .replace(/, so its issues and devices were not compared$/, ", so its issues and devices were not read")
+        .replace(/, so they were compared as one$/, ", so they were read as one")
         .replace(/[,;] (and |so )?rooms are not called added or removed( this time)?/, "");
     const text = notCompared.length ? [summary, "", "Not read in this first check:", ...notCompared.map((n) => `- ${firstWords(n)}`)].join("\n") : summary;
     return { summary, text, changes: [], notCompared, firstRun: true };
@@ -488,7 +513,9 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const lined = carryIds(detailWas, detailNow);
     detailWas = carryUnnamed(lined.was, detailNow);
     for (const k of lined.split) notCompared.push(`${now_.name}: ${k.replace(/\)$/, "")}) now names more than one device; they are told apart by Zoom device id from this check on, so they were not compared this time`);
-    for (const k of new Set([...(detailNow.shared ?? []), ...(detailWas.shared ?? [])])) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
+    for (const [k, st] of lined.recovered) add(nm, "better", `${k}: back online (was ${st}); Zoom now lists more than one device with this name, all online.`);
+    // Said when it first happens, not on every check (Sonnet review, 11/27).
+    for (const k of (detailNow.shared ?? []).filter((k) => !(detailWas!.shared ?? []).includes(k))) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
     // One line for all such rooms, not one per room per check (Sonnet review, 11/25): on a live account it is all of them.
     if (detailWas.issuesRead === false || detailNow.issuesRead === false) issuesUnread.push(nm);
     else {
@@ -499,6 +526,10 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     }
     for (const [d, s] of Object.entries(detailNow.down)) {
       if (lined.skip.has(d)) continue;
+      if (lined.fresh.has(d)) {
+        add(nm, "worse", `${d}: ${s} (at the last check this name was one device, online; Zoom now lists more than one).`);
+        continue;
+      }
       const prev = detailWas.down[d];
       if (prev === undefined) add(nm, "worse", `${d}: ${s} (was online).`);
       else if (prev.toLowerCase() !== s.toLowerCase()) add(nm, "changed", `${d}: now ${s} (was ${prev}).`);

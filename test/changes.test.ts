@@ -565,7 +565,44 @@ test("review: same-named devices with no Zoom id are compared as one and say so"
   const { state, client } = fakeAccount();
   state.devices.r2 = [panel(undefined, "Online"), panel(undefined, "Offline")];
   const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
-  await call(c);
   const text = (await call(c)).content[0]!.text;
-  assert.match(text, /more than one Panel \(Controller\) and Zoom gave no device id to tell them apart, so they were compared as one/, text);
+  assert.match(text, /more than one Panel \(Controller\) and Zoom gave no device id to tell them apart, so they were (compared|read) as one/, text);
+});
+
+// Sonnet review of 65b2000.
+test("review: a second same-named device that arrives down is reported, even when the old check predates ids", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel(undefined, "Online")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /\[worse\] Panel \(Controller, Zoom device p2\): Offline \(at the last check this name was one device, online/, text);
+});
+
+test("review: a down device under an old shared key that recovers alongside a new twin reads as back online", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel(undefined, "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Online")];
+  assert.match((await call(c)).content[0]!.text, /\[better\] Panel \(Controller\): back online \(was Offline\); Zoom now lists more than one device/);
+});
+
+test("review: a duplicate that gains a Zoom id keeps its history", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("p1", "Online"), panel(undefined, "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /was online|no longer in the room's device list|back online/, text);
+});
+
+test("review: the shared-name note is said once, not on every check", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel(undefined, "Online"), panel(undefined, "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  assert.match((await call(c)).content[0]!.text, /as one/);
+  assert.doesNotMatch((await call(c)).content[0]!.text, /as one/);
 });
