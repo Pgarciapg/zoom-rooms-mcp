@@ -157,7 +157,7 @@ export const findPlace = async (
   client: ZoomRoomsClient,
   want: (text: string) => boolean,
   roomCodes: string[],
-): Promise<{ places: { label: string; codes: string[] }[]; read: boolean; problem: string | null }> => {
+): Promise<{ places: { label: string; codes: string[]; id: string; within: string }[]; read: boolean; problem: string | null }> => {
   const { tree, problem } = await readTree(client);
   if (!tree.size) return { places: [], read: false, problem };
   const ancestors = (id: string): string[] => {
@@ -171,11 +171,18 @@ export const findPlace = async (
     }
     return out;
   };
-  const matched = [...tree.keys()].filter((id) => want(tree.get(id)!.name) || want(placeName(tree, id).name ?? ""));
+  // A Zoom location code matches too, so two places with one label can be told apart by code (Codex review, 11/24).
+  const matched = [...tree.keys()].filter((id) => want(tree.get(id)!.name) || want(placeName(tree, id).name ?? "") || want(id));
   // A match inside another match (a floor named like its building) is the outer place.
   const outer = matched.filter((id) => !ancestors(id).slice(1).some((a) => matched.includes(a)));
   const places = outer
-    .map((id) => ({ label: placeName(tree, id).name ?? tree.get(id)!.name ?? id, codes: roomCodes.filter((c) => ancestors(c).includes(id)) }))
+    .map((id) => ({
+      label: placeName(tree, id).name ?? tree.get(id)!.name ?? id,
+      codes: roomCodes.filter((c) => ancestors(c).includes(id)),
+      id,
+      // The levels above the label (campus, city, country), to tell two same-named places apart.
+      within: ancestors(id).slice(1).map((a) => tree.get(a)!.name).filter(Boolean).filter((n) => !(placeName(tree, id).name ?? "").includes(n)).join(", "),
+    }))
     .filter((p) => p.codes.length > 0);
   return { places, read: true, problem };
 };

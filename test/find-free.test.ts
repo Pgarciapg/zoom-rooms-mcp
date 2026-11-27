@@ -299,3 +299,22 @@ test("review: the named room itself, free with no Zoom id, is not also listed as
   assert.ok(!r.couldNotCheck.some((n: string) => /^Nook: looks free/.test(n)), JSON.stringify(r.couldNotCheck));
   assert.ok(r.couldNotCheck.includes("2 rooms with no name and no Zoom id look free but can't be listed; check them in Zoom."), JSON.stringify(r.couldNotCheck));
 });
+
+// Codex review of cdd6d8e (MEDIUM, locations.ts:175 / free-room.ts:83): two campuses with one floor label.
+test("review: two campuses with the same 'Building 1, 2nd Floor' are told apart by location code, and the code works", async () => {
+  const locs = [
+    { id: "us", name: "United States", type: "country", parent_location_id: "" },
+    { id: "aus", name: "Austin", type: "city", parent_location_id: "us" },
+    { id: "den", name: "Denver", type: "city", parent_location_id: "us" },
+    { id: "a1", name: "Building 1", type: "building", parent_location_id: "aus" },
+    { id: "d1", name: "Building 1", type: "building", parent_location_id: "den" },
+    { id: "a12", name: "2nd Floor", type: "floor", parent_location_id: "a1" },
+    { id: "d12", name: "2nd Floor", type: "floor", parent_location_id: "d1" },
+  ];
+  const rooms = [room("x", "Austin Huddle", "a12"), room("y", "Denver Huddle", "d12")];
+  const client = { ...fake(rooms), listLocations: async () => ({ locations: locs, next_page_token: "" }) };
+  const ask = await findFreeRoom(client, { near: "Building 1, 2nd Floor" });
+  assert.match(ask.summary, /matches more than one place \(Building 1, 2nd Floor in Austin, United States \(location code a12\); Building 1, 2nd Floor in Denver, United States \(location code d12\)\)\. Say which one by its location code, like "a12"\./, ask.summary);
+  const picked = await findFreeRoom(client, { near: "d12" });
+  assert.deepEqual(picked.rooms.map((r) => r.name), ["Denver Huddle"]);
+});

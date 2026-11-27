@@ -91,6 +91,13 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
       if (found.problem) couldNotCheck.push(`Places: ${found.problem}, so a place by that name may be missed or incomplete.`);
       if (found.places.length > 1) {
         const labels = found.places.map((p) => p.label).sort();
+        // One label for several places ("Building 1, 2nd Floor" on two campuses): suggest each one's location code,
+        // never the same ambiguous label again (Codex review, 11/24).
+        if (new Set(labels.map(squash)).size < labels.length) {
+          const opts_ = [...found.places].sort((a, b) => a.label.localeCompare(b.label) || a.within.localeCompare(b.within) || a.id.localeCompare(b.id));
+          const each = opts_.map((p) => `${cleanName(p.label)}${p.within ? ` in ${cleanName(p.within)}` : ""} (location code ${cleanName(p.id)})`);
+          return { ...base, summary: `"${cleanName(opts.near)}" matches more than one place (${each.join("; ")}). Say which one by its location code, like "${cleanName(opts_[0]!.id)}".`, couldNotCheck };
+        }
         return { ...base, summary: `"${cleanName(opts.near)}" matches more than one place (${labels.join("; ")}). Say which one, like "${labels[0]}".`, couldNotCheck };
       }
       if (found.places.length === 1) place = { name: found.places[0]!.label, codes: new Set(found.places[0]!.codes) };
