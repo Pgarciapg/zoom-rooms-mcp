@@ -63,6 +63,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     return ` (${(await lookUpFits(client, [room.id], attendees))[0]!.text})`;
   };
   let near: { id: string; name: string; location: string } | null = null;
+  let nearRow: unknown = null;
   let place: { name: string; codes: Set<string> } | null = null;
   let nearFree = false;
   let nearNoHealth = "";
@@ -110,6 +111,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     // A place: free rooms in it (below). A room: free rooms in its location.
     if (!place) {
     const r = distinct[0]!;
+    nearRow = r;
     near = { id: idOf(r), name: cleanName(str(r.name)) || cleanName(idOf(r)), location: str(r.location_id) };
     // The named room itself is never listed as "nearby", but when it is free and healthy that is the first thing to say.
     nearFree = isFreeNow(r);
@@ -130,8 +132,11 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   const free = freeRoomsIn(rooms, new Set(near ? [near.id] : []), locations);
   // A free room with no Zoom id can't be listed by id, but it is free: named here, so "no room is free" is never said
   // over it (Codex review, 11/24).
-  const idless = rooms.filter((r): r is Record<string, unknown> => isObj(r) && !str(r.id) && !str(r.room_id) && locations.has(str(r.location_id)) && isFreeNow(r));
-  for (const r of idless) couldNotCheck.push(`${cleanName(str(r.name)) || "A room with no name"}: looks free but has no Zoom id, so it is not listed; check it in Zoom.`);
+  // The named room itself is said on its own, never again here (Sonnet review, 11/27).
+  const idless = rooms.filter((r): r is Record<string, unknown> => isObj(r) && r !== nearRow && !str(r.id) && !str(r.room_id) && locations.has(str(r.location_id)) && isFreeNow(r));
+  for (const r of idless.filter((r) => cleanName(str(r.name)))) couldNotCheck.push(`${cleanName(str(r.name))}: looks free but has no Zoom id, so it is not listed; check it in Zoom.`);
+  const nameless = idless.filter((r) => !cleanName(str(r.name))).length;
+  if (nameless) couldNotCheck.push(`${nameless === 1 ? "A room with no name and no Zoom id looks" : `${nameless} rooms with no name and no Zoom id look`} free but can't be listed; check ${nameless === 1 ? "it" : "them"} in Zoom.`);
   const where = place ? ` in ${place.name}` : near ? ` in the same Zoom location as ${near.name}` : "";
   const placeOut = place ? { place: { name: place.name, locations: [...place.codes] } } : {};
   const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;

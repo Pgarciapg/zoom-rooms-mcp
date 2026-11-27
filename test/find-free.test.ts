@@ -291,3 +291,11 @@ test("review: an account whose only free room has no Zoom id never gets a flat '
   assert.ok(r.couldNotCheck.some((n: string) => /^Nook: looks free but has no Zoom id/.test(n)), JSON.stringify(r.couldNotCheck));
   assert.match(r.summary, /Not everything could be read, so this may be incomplete/);
 });
+
+// Sonnet review of 4903fa3.
+test("review: the named room itself, free with no Zoom id, is not also listed as an id-less free room; nameless ones are counted", async () => {
+  const rooms = [{ name: "Nook", status: "Available", health: "Healthy", location_id: "L4" }, { status: "Available", health: "Healthy", location_id: "L4" }, { status: "Available", health: "Healthy", location_id: "L4" }];
+  const r = await findFreeRoom(fake(rooms), { near: "Nook" });
+  assert.ok(!r.couldNotCheck.some((n: string) => /^Nook: looks free/.test(n)), JSON.stringify(r.couldNotCheck));
+  assert.ok(r.couldNotCheck.includes("2 rooms with no name and no Zoom id look free but can't be listed; check them in Zoom."), JSON.stringify(r.couldNotCheck));
+});
