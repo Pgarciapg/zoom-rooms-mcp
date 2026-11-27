@@ -305,6 +305,9 @@ const carryIds = <T extends RoomDetailFacts>(
     if (rename.has(k) || targets0.has(k) || !nowKeys.has(k) || !leftById(k)) continue;
     const nid = now_.ids?.[k];
     if (nid === undefined || nid === was.ids![k]) continue;
+    // Down before and down now under one name: compared as the same device, so a Zoom id that changes on a re-pair
+    // never reads as a removal plus a new outage every check (Sonnet review, 11/27).
+    if (Object.hasOwn(was.down, k) && Object.hasOwn(now_.down, k)) continue;
     drop.add(k);
     if (Object.hasOwn(was.down, k)) left.push([k, was.down[k]!]);
     if (Object.hasOwn(now_.down, k)) newcomer.add(k);

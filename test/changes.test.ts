@@ -838,3 +838,15 @@ test("review: a new offline room with id-less twins names the grouping", async (
   state.devices.r3 = [panel(undefined, "Offline"), panel(undefined, "Offline")];
   assert.match((await call(c)).content[0]!.text, /Room Three: more than one Panel \(Controller\) and Zoom gave no device id/);
 });
+
+// Sonnet review of 0d2d8bf.
+test("review: a down device whose Zoom id changes between reads stays one device still down", async () => {
+  const { state, client } = fakeAccount();
+  let n = 0;
+  state.devices.r2 = [];
+  const churn: ZoomRoomsClient = { ...client, getRoomDevices: async () => ({ devices: [{ id: `x${n++}`, name: "Mic", device_type: "Microphone", status: "Offline" }] }) };
+  const c = await connect(churn, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /Mic \(Microphone\)/, text);
+});
