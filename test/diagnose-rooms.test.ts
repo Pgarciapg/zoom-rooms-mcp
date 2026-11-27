@@ -287,3 +287,13 @@ test("review: when two problem rooms' device reads fail, the summary does not ca
   assert.doesNotMatch(d.summary, /each problem looks local/, d.summary);
   assert.match(d.summary, /2 problem rooms' devices could not be read, so a shared device cause involving them would not show here\./, d.summary);
 });
+
+// Codex review of cdd6d8e (MEDIUM, diagnose-rooms.ts:244): an Offline room with only room_id.
+test("review: an Offline room listed with only room_id is diagnosed by that id", async () => {
+  const asked: string[] = [];
+  const rows = [{ room_id: "z9", name: "Z9", status: "Offline", health: "Critical" }];
+  const d = await diagnoseRooms(account(rows, { z9: detail("z9") }, { z9: ok }, { getRoom: async (id) => (asked.push(id), detail(id)) }), NOW);
+  assert.ok(asked.includes("z9"), JSON.stringify(asked));
+  assert.ok(!asked.includes(""), JSON.stringify(asked));
+  assert.notEqual(d.rooms[0]?.level, "could_not_check");
+});

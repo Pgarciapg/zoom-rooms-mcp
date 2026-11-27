@@ -259,7 +259,8 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
 
   // One location-list read shared by every room in this call.
   const places = new PlaceNamer(client);
-  const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id), now, r, places)));
+  // A row with only room_id is read by that id, never by an empty one (Codex review, 11/24).
+  const diagnoses = await Promise.all(problems.slice(0, limit).map(({ r }) => diagnoseRoom(client, str(r.id) || str(r.room_id), now, r, places)));
   // Zoom's documented room list has no health field (Codex review, 11/25): an up room with none could still have a
   // device down, so it is read too, with whatever room is left under the limit. One with a finding is a problem room.
   const quiet = rooms.filter((r) => !levelOf(r) && !str(r.health) && UP_STATUS.test(str(r.status)) && (str(r.id) || str(r.room_id)));
@@ -322,7 +323,7 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
 
   const rows: RoomRow[] = diagnoses.map((d, i) => {
     const r = problems[i]!.r;
-    if (!d.room) return { id: str(r.id), name: str(r.name) || str(r.id), level: "could_not_check", findings: 0, top: null, couldNotCheck: d.couldNotCheck.length };
+    if (!d.room) return { id: str(r.id) || str(r.room_id), name: str(r.name) || str(r.id) || str(r.room_id), level: "could_not_check", findings: 0, top: null, couldNotCheck: d.couldNotCheck.length };
     const level: FindingLevel = d.findings.some((f) => f.level === "critical") ? "critical" : "warning";
     return { id: d.room.id, name: d.room.name, level, findings: d.findings.length, top: d.findings[0]?.subject ?? null, couldNotCheck: d.couldNotCheck.length };
   });
