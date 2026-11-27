@@ -120,11 +120,15 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   // One room listed twice (on two pages) is one room, never counted twice; its worse row is kept, like diagnose_rooms
   // (Codex review, 11/27).
   {
+    // A row that is not an object can't be read: noted and skipped, never a crash (Sonnet review, 11/27).
+    const bad = rooms.filter((r) => !r || typeof r !== "object" || Array.isArray(r)).length;
+    if (bad) couldNotCheck.push(`Room list: ${bad === 1 ? "1 row" : `${bad} rows`} could not be read and ${bad === 1 ? "was" : "were"} skipped.`);
+    rooms = rooms.filter((r) => r && typeof r === "object" && !Array.isArray(r));
     const rank = (r: any) => (levelOf(r) === "critical" ? 2 : levelOf(r) === "warning" ? 1 : 0);
     const kept = new Map<string, number>();
     const deduped: any[] = [];
     for (const r of rooms) {
-      const id = r && typeof r === "object" ? str(r.id) || str(r.room_id) : "";
+      const id = str(r.id).trim() || str(r.room_id).trim();
       if (!id) {
         deduped.push(r);
         continue;

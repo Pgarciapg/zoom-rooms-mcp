@@ -108,3 +108,14 @@ test("review: a room listed twice counts once, keeping its worse row", async () 
   assert.equal(d.needAttention, 1);
   assert.ok(d.couldNotCheck.some((n: string) => /room id a appeared twice/.test(n)), JSON.stringify(d.couldNotCheck));
 });
+
+test("review: a null row in the room list is noted and skipped, never a crash", async () => {
+  const client = {
+    listRooms: async () => ({ rooms: [null, { id: "b", name: "B", status: "Offline", health: "Critical" }] }),
+    getRoom: async (id: string) => ({ id, issues: [] }),
+    getRoomDevices: async () => ({ devices: [] }),
+  } as any;
+  const d = await roomsNeedingAttention(client, 15, Date.parse("2026-11-27T15:00:00Z"));
+  assert.equal(d.total, 1);
+  assert.ok(d.couldNotCheck.some((n: string) => /1 row could not be read and was skipped/.test(n)), JSON.stringify(d.couldNotCheck));
+});
