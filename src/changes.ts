@@ -279,7 +279,7 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
 const carryIds = <T extends RoomDetailFacts>(
   was: T,
   now_: RoomDetailFacts,
-): { was: T; skip: Set<string>; split: string[]; fresh: Set<string>; recovered: [string, string][]; removed: [string, string][] } => {
+): { was: T; skip: Set<string>; split: string[]; fresh: Set<string>; recovered: [string, string][]; removed: [string, string][]; newcomer: Set<string> } => {
   const nowKeys = new Set([...Object.keys(now_.down), ...(now_.seen ?? [])]);
   const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
   const keyById = new Map(Object.entries(now_.ids ?? {}).map(([k, id]) => [id, k]));
@@ -291,15 +291,36 @@ const carryIds = <T extends RoomDetailFacts>(
   }
   const skip = new Set<string>();
   const fresh = new Set<string>();
+  const newcomer = new Set<string>();
   const split: string[] = [];
   const recovered: [string, string][] = [];
+  const left: [string, string][] = [];
   const drop = new Set<string>();
+  const nowIdSet = new Set(Object.values(now_.ids ?? {}));
+  const targets0 = new Set(rename.values());
+  // Saved ids settle a replacement: the old device's id is gone and a different id now has its name, so the old one
+  // left and the new one is new; never "back online" by name (Codex review, 11/27).
+  const leftById = (k: string) => was.ids?.[k] !== undefined && !nowIdSet.has(was.ids[k]!);
+  for (const k of oldKeys) {
+    if (rename.has(k) || targets0.has(k) || !nowKeys.has(k) || !leftById(k)) continue;
+    const nid = now_.ids?.[k];
+    if (nid === undefined || nid === was.ids![k]) continue;
+    drop.add(k);
+    if (Object.hasOwn(was.down, k)) left.push([k, was.down[k]!]);
+    if (Object.hasOwn(now_.down, k)) newcomer.add(k);
+  }
   for (const old of oldKeys) {
     if (nowKeys.has(old) || rename.has(old) || !old.endsWith(")")) continue;
     const stem = `${old.slice(0, -1)}, Zoom device `;
     const taken = new Set(rename.values());
     const parts = [...nowKeys].filter((k) => k.startsWith(stem) && !oldKeys.has(k) && !taken.has(k));
     if (!parts.length) continue;
+    if (leftById(old)) {
+      drop.add(old);
+      if (Object.hasOwn(was.down, old)) left.push([old, was.down[old]!]);
+      for (const p of parts) if (Object.hasOwn(now_.down, p)) newcomer.add(p);
+      continue;
+    }
     if (parts.length === 1) {
       // A same-named device was already told apart by id last time, and the one with no id then is gone while a new id
       // appeared: either it gained an id or it was replaced, and nothing tells which (Sonnet and Codex reviews, 11/27).
@@ -332,19 +353,20 @@ const carryIds = <T extends RoomDetailFacts>(
       split.push(old);
     }
   }
-  if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered, removed: [] };
+  if (!rename.size && !drop.size) return { was, skip, split, fresh, recovered, removed: [], newcomer };
   // An old key with no saved id that another device's id now claims cannot be told apart: dropped, not guessed.
   const targets = new Set(rename.values());
   const gone = (k: string) => drop.has(k) || (!rename.has(k) && targets.has(k));
   // A down device dropped that way whose own saved id is no longer listed has left the room: said, not swallowed.
   const nowIds = new Set(Object.values(now_.ids ?? {}));
-  const removed: [string, string][] = Object.entries(was.down).filter(
-    ([k]) => !drop.has(k) && !rename.has(k) && targets.has(k) && was.ids?.[k] !== undefined && !nowIds.has(was.ids[k]!),
-  );
+  const removed: [string, string][] = [
+    ...left,
+    ...Object.entries(was.down).filter(([k]) => !drop.has(k) && !rename.has(k) && targets.has(k) && was.ids?.[k] !== undefined && !nowIds.has(was.ids[k]!)),
+  ];
   const down: Record<string, string> = {};
   for (const [k, s] of Object.entries(was.down)) if (!gone(k)) down[rename.get(k) ?? k] = s;
   const seen = was.seen?.filter((k) => !gone(k)).map((k) => rename.get(k) ?? k);
-  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered, removed };
+  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split, fresh, recovered, removed, newcomer };
 };
 
 /**
@@ -387,6 +409,12 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   const rows: unknown[] = rawRows;
   let fullList = !(isObj(list) && str((list as any).next_page_token));
   if (!fullList) couldNotCheck.push("Room list: more rooms exist than were read, so rooms are not called added or removed");
+  // A last page with no token that still counts more rooms than were returned is not whole either (Codex review, 11/27).
+  const counted = isObj(list) ? Number((list as any).total_records) : NaN;
+  if (fullList && Number.isFinite(counted) && counted > rawRows.length) {
+    fullList = false;
+    couldNotCheck.push(`Room list: Zoom counts ${counted} rooms but returned ${rawRows.length}, so rooms are not called added or removed`);
+  }
   const rooms = new Map<string, RoomListFacts>();
   for (const r of rows) {
     const id = isObj(r) ? str((r as any).id) : "";
@@ -531,6 +559,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     if (!before) {
       if (previous.fullListAt && reading.fullList) add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
       else notCompared.push(`${now_.name}: not in the last check's room list, which was not read in full, so it may not be new`);
+      for (const k of reading.details.get(id)?.shared ?? []) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were read as one`);
       continue;
     }
     times.push(before.list.at);
@@ -579,6 +608,10 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     }
     for (const [d, s] of Object.entries(detailNow.down)) {
       if (lined.skip.has(d)) continue;
+      if (lined.newcomer.has(d)) {
+        add(nm, "worse", `${d}: ${s} (new in the room's device list since the last check).`);
+        continue;
+      }
       if (lined.fresh.has(d)) {
         add(nm, "worse", `${d}: ${s} (at the last check this name read as one device, online; Zoom now lists more than one).`);
         continue;

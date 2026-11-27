@@ -735,8 +735,11 @@ test("review: two devices that swap names keep their own histories by Zoom devic
   const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
   await call(c);
   state.devices.r2 = [{ id: "a", name: "Backup", device_type: "Controller", status: "Offline" }, { id: "b", name: "Panel", device_type: "Controller", status: "Online" }];
-  const text = (await call(c)).content[0]!.text;
-  assert.doesNotMatch(text, /back online|was online/, text);
+  const r = await call(c);
+  const text = r.content[0]!.text;
+  assert.ok(!r.isError, text);
+  assert.doesNotMatch(text, /back online|was online|no longer in the room's device list|Controller\)/, text);
+  assert.match(text, /^(Nothing changed|No changes in what could be compared)/, text);
 });
 
 test("review: id-less same-named devices listed in another order are not a status change", async () => {
@@ -788,4 +791,50 @@ test("review: a down device that leaves while another takes its name is reported
   const text = (await call(c)).content[0]!.text;
   assert.match(text, /B \(Controller\) \(Zoom device b\): no longer in the room's device list \(was Offline\)/, text);
   assert.doesNotMatch(text, /\[better\]|was online/, text);
+});
+
+// Codex review of 76d775b.
+test("review: a last page with no token that counts more rooms than it returned never reports removals", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect({ ...client, listRooms: async (o) => ({ ...((await client.listRooms(o)) as object), total_records: 2 }) }, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [state.rooms[0]];
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /No longer in the account/, text);
+  assert.match(text, /Zoom counts 2 rooms but returned 1/, text);
+});
+
+test("review: an offline controller replaced by an online one with the same name (new Zoom id) is not back online", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("a", "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("b", "Online")];
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /\[better\]/, text);
+  assert.match(text, /Panel \(Controller\) \(Zoom device a\): no longer in the room's device list \(was Offline\)/, text);
+  // And a down replacement is new, not "was online" or "now Offline (was Offline)".
+  state.devices.r2 = [panel("c", "Offline")];
+  const next = (await call(c)).content[0]!.text;
+  assert.match(next, /\[worse\] Panel \(Controller\): Offline \(new in the room's device list since the last check\)/, next);
+});
+
+test("review: saved ids settle an offline p1 replaced by online p2 and p3", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("p1", "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p2", "Online"), panel("p3", "Online")];
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /could not be matched|\[better\]|may have been replaced/, text);
+  assert.match(text, /\(Zoom device p1\): no longer in the room's device list \(was Offline\)/, text);
+});
+
+test("review: a new offline room with id-less twins names the grouping", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [...state.rooms, { id: "r3", name: "Room Three", status: "Offline", health: "Critical" }];
+  state.devices.r3 = [panel(undefined, "Offline"), panel(undefined, "Offline")];
+  assert.match((await call(c)).content[0]!.text, /Room Three: more than one Panel \(Controller\) and Zoom gave no device id/);
 });
