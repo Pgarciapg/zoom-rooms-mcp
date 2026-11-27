@@ -117,6 +117,30 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
     return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };
   }
 
+  // One room listed twice (on two pages) is one room, never counted twice; its worse row is kept, like diagnose_rooms
+  // (Codex review, 11/27).
+  {
+    const rank = (r: any) => (levelOf(r) === "critical" ? 2 : levelOf(r) === "warning" ? 1 : 0);
+    const kept = new Map<string, number>();
+    const deduped: any[] = [];
+    for (const r of rooms) {
+      const id = r && typeof r === "object" ? str(r.id) || str(r.room_id) : "";
+      if (!id) {
+        deduped.push(r);
+        continue;
+      }
+      const at = kept.get(id);
+      if (at === undefined) {
+        kept.set(id, deduped.length);
+        deduped.push(r);
+        continue;
+      }
+      couldNotCheck.push(`Room list: room id ${cleanName(id)} appeared twice; its worse row was kept.`);
+      if (rank(r) > rank(deduped[at])) deduped[at] = r;
+    }
+    rooms = deduped;
+  }
+
   const unknownHealth = rooms.filter((r) => !levelOf(r) && !/^healthy$/i.test(str(r.health)));
 
   const problems = rooms

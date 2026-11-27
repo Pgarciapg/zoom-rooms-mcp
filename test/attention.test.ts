@@ -95,3 +95,16 @@ test("an Available room with no health field and an offline controller is read a
   assert.equal(a.needAttention, 1);
   assert.equal(a.allClear, false);
 });
+
+// Codex review of 2942407 (MEDIUM, attention.ts:123): one room on two pages is one room.
+test("review: a room listed twice counts once, keeping its worse row", async () => {
+  const client = {
+    listRooms: async () => ({ rooms: [{ id: "a", name: "A", status: "Offline", health: "Critical" }, { id: "a", name: "A", status: "Offline", health: "Critical" }, { id: "b", name: "B", status: "Available", health: "Healthy" }] }),
+    getRoom: async (id: string) => ({ id, issues: [] }),
+    getRoomDevices: async () => ({ devices: [{ name: "C", device_type: "Controller", status: "Online" }] }),
+  } as any;
+  const d = await roomsNeedingAttention(client, 15, Date.parse("2026-11-27T15:00:00Z"));
+  assert.equal(d.total, 2);
+  assert.equal(d.needAttention, 1);
+  assert.ok(d.couldNotCheck.some((n: string) => /room id a appeared twice/.test(n)), JSON.stringify(d.couldNotCheck));
+});
