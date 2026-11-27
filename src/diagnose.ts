@@ -215,6 +215,8 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   const rawIssues = detail?.issues;
   if (detail && isObj(detail) && !("issues" in detail)) couldNotCheck.push("Open issues: the room detail has no issues list, so open issues could not be read.");
   if (rawIssues != null && !Array.isArray(rawIssues)) couldNotCheck.push("Open issues: Zoom answered in an unexpected shape, so they could not be read.");
+  // `issues: null` is no list at all, never "no open issues" (Codex review, 11/24), so it is never an all-clear.
+  if (detail && isObj(detail) && "issues" in detail && rawIssues === null) couldNotCheck.push("Open issues: Zoom gave an empty value instead of an issues list, so open issues could not be read.");
   const issueRows = arr(rawIssues);
   if (issueRows.some((i) => !isObj(i))) couldNotCheck.push(`Open issues: ${plural(issueRows.filter((i) => !isObj(i)).length, "entry")} could not be read.`.replace("entrys", "entries"));
   const issues: RoomIssue[] = issueRows

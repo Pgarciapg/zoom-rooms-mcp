@@ -278,3 +278,12 @@ test("review: rooms on two floors under one building code are not one floor's ou
   const d = await diagnoseRooms(account(rows, details, { a: ok, b: ok }), NOW);
   assert.ok(!d.patterns.some((p) => p.kind === "location-offline"), JSON.stringify(d.patterns.map((p) => p.title)));
 });
+
+// Codex review of cdd6d8e (MEDIUM, diagnose-rooms.ts:291): failed device reads must not leave "each problem looks local".
+test("review: when two problem rooms' device reads fail, the summary does not call each problem local", async () => {
+  const rows = [row("a", "Available", "Warning"), row("b", "Available", "Warning"), row("c", "Available", "Healthy")];
+  const details = { a: detail("a", floor4), b: detail("b", { building: "Building 2", floor: "1st Floor" }), c: detail("c") };
+  const d = await diagnoseRooms(account(rows, details, {}, { getRoomDevices: async () => { throw new Error("Zoom API 500"); } }), NOW);
+  assert.doesNotMatch(d.summary, /each problem looks local/, d.summary);
+  assert.match(d.summary, /2 problem rooms' devices could not be read, so a shared device cause involving them would not show here\./, d.summary);
+});

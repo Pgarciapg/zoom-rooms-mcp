@@ -278,3 +278,16 @@ test("review: an alert that names a device in other failure words still explains
     assert.match(d.findings[0]!.detail, new RegExp(text));
   }
 });
+
+// Codex review of cdd6d8e (MEDIUM, diagnose.ts:200): `issues: null` must not give an all-clear.
+test("review: a healthy room whose issues come back null is not an all-clear", async () => {
+
+  const client = {
+    listRooms: async () => ({ rooms: [{ id: "a", name: "A", status: "Available", health: "Healthy" }] }),
+    getRoom: async () => ({ id: "a", name: "A", status: "Available", health: "Healthy", issues: null }),
+    getRoomDevices: async () => ({ devices: [{ name: "Controller", device_type: "Controller", status: "Online" }] }),
+  } as any;
+  const d = await diagnoseRoom(client, "a");
+  assert.ok(d.couldNotCheck.some((c: string) => /^Open issues: Zoom gave an empty value/.test(c)), JSON.stringify(d.couldNotCheck));
+  assert.notEqual(d.allClear, true);
+});

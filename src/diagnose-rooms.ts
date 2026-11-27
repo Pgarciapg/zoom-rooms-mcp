@@ -337,6 +337,10 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
   const unseen = notDiagnosed.length + unread;
   const caveat = unseen ? ` ${plural(unseen, "problem room")} could not be included (${[notDiagnosed.length ? `${notDiagnosed.length} past the limit` : "", unread ? `${unread} could not be read` : ""].filter(Boolean).join(", ")}), so a shared cause involving ${unseen === 1 ? "it" : "them"} would not show here.` : "";
 
+  // Problem rooms read but whose devices could not be (Codex review, 11/24): a shared device cause could hide there, so
+  // the summary never calls each problem local without saying so.
+  const partly = diagnoses.filter((d) => d.room && d.couldNotCheck.some((c) => /^Devices:/.test(c))).length;
+  const partlyNote = partly ? ` ${partly === 1 ? "1 problem room's devices" : `${partly} problem rooms' devices`} could not be read, so a shared device cause involving ${partly === 1 ? "it" : "them"} would not show here.` : "";
   const allClear = rooms.length > 0 && problems.length === 0 && couldNotCheck.length === 0;
   const devicesClear = !allClear && rooms.length > 0 && problems.length === 0 && alertsUnread.length > 0 && couldNotCheck.length === 1 && rooms.every((r) => UP_STATUS.test(str(r.status)));
   const lines: string[] = [];
@@ -349,8 +353,12 @@ export const diagnoseRooms = async (client: ZoomRoomsClient, now = Date.now(), l
     const among = unseen ? `among the ${plural(diagnoses.length - unread, "room")} diagnosed` : "across the rooms";
     lines.push(
       `${head} ${
-        patterns.length ? `${plural(patterns.length, "shared cause")} found ${among}; start with: ${patterns[0]!.title}.` : `No shared cause ${among}: each problem looks local, so work down the list.`
-      }${caveat}`,
+        patterns.length
+          ? `${plural(patterns.length, "shared cause")} found ${among}; start with: ${patterns[0]!.title}.`
+          : partly
+            ? `No shared cause found ${among} in what could be read, so work down the list.`
+            : `No shared cause ${among}: each problem looks local, so work down the list.`
+      }${caveat}${partlyNote}`,
     );
     if (patterns.length) {
       lines.push("", "Shared causes, worst first:");
