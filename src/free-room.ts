@@ -128,6 +128,10 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
 
   const locations = place ? place.codes : near ? new Set([near.location]) : new Set(rooms.map((r) => str(r.location_id)));
   const free = freeRoomsIn(rooms, new Set(near ? [near.id] : []), locations);
+  // A free room with no Zoom id can't be listed by id, but it is free: named here, so "no room is free" is never said
+  // over it (Codex review, 11/24).
+  const idless = rooms.filter((r): r is Record<string, unknown> => isObj(r) && !str(r.id) && !str(r.room_id) && locations.has(str(r.location_id)) && isFreeNow(r));
+  for (const r of idless) couldNotCheck.push(`${cleanName(str(r.name)) || "A room with no name"}: looks free but has no Zoom id, so it is not listed; check it in Zoom.`);
   const where = place ? ` in ${place.name}` : near ? ` in the same Zoom location as ${near.name}` : "";
   const placeOut = place ? { place: { name: place.name, locations: [...place.codes] } } : {};
   const nearOut = near ? { id: near.id, name: near.name, free: nearFree } : null;

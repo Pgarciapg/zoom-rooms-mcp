@@ -283,3 +283,11 @@ test("review: rooms with no health from Zoom are not counted as healthy in the s
   assert.match(all.summary, /^1 room is free right now \(Zoom gives no health for it\)\./);
   assert.match(all.summary, /healthy where Zoom gives health/);
 });
+
+// Codex review of cdd6d8e (MEDIUM, free-room.ts:111): a free room with no Zoom id is not silently dropped.
+test("review: an account whose only free room has no Zoom id never gets a flat 'no room is free'", async () => {
+  const rooms = [room("b", "Board Room", "L4", "In Meeting"), { name: "Nook", status: "Available", health: "Healthy", location_id: "L4" }];
+  const r = await findFreeRoom(fake(rooms), {});
+  assert.ok(r.couldNotCheck.some((n: string) => /^Nook: looks free but has no Zoom id/.test(n)), JSON.stringify(r.couldNotCheck));
+  assert.match(r.summary, /Not everything could be read, so this may be incomplete/);
+});
