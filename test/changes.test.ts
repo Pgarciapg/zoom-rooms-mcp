@@ -920,3 +920,30 @@ test("review: an unconfirmed room that also changed gets one 'New room' line", a
   assert.match(text, /Room Nine:\n- \[worse\] New room in the account \(Offline, Critical\)\.\n\n/, text);
   assert.doesNotMatch(text, /Went offline|Renamed from|Health worse/, text);
 });
+
+// Codex review of 2942407.
+test("review: a room seen only in a first, partial check is not called removed by the first full one", async () => {
+  const { state, client } = fakeAccount();
+  const rooms = state.rooms;
+  state.rooms = [...rooms, { id: "r9", name: "Room Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = rooms;
+  state.nextToken = "";
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /No longer in the account/, text);
+});
+
+test("review: the full read that confirms a new room still names its grouped devices", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [...state.rooms, { id: "r9", name: "Room Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  await call(c);
+  state.rooms[2] = { ...state.rooms[2], status: "Offline" };
+  state.devices.r9 = [panel(undefined, "Offline"), panel(undefined, "Offline")];
+  state.nextToken = "";
+  assert.match((await call(c)).content[0]!.text, /Room Nine: more than one Panel \(Controller\)/);
+});

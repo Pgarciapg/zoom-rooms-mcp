@@ -67,8 +67,9 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     const seen = new Set<string>();
     let token = "";
     let last: any = {};
-    // The latest room count any page gave, kept on the result: a last page that leaves it out never hides a count an
-    // earlier page gave, and a count that drops mid-paging (a room deleted) uses the newer number (Codex reviews, 11/27).
+    // The largest room count any page gave, kept on the result: a last page that leaves it out never hides a count an
+    // earlier page gave. A count that drops mid-paging keeps the larger one on purpose: the list then reads partial, so
+    // no tool gives an all-clear over a room it never read (Codex reviews, 11/27; a missed removal waits one check).
     let total: number | undefined;
     const done = (extra: Record<string, unknown>) => ({ ...last, rooms, ...(total !== undefined ? { total_records: total } : {}), ...extra });
     for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
@@ -91,7 +92,7 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
         last = await this.request(`/rooms?${query}`, Math.max(1, left));
       }
       const count = roomCount(last);
-      if (count !== undefined) total = count;
+      if (count !== undefined) total = Math.max(total ?? 0, count);
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
       // A later page with no rooms list is a bad page, never the end of the list (Codex review, 11/25): read as the end,
@@ -214,7 +215,17 @@ export const listIsPartial = (list: unknown): boolean => {
   if ((typeof tok === "string" || typeof tok === "number") && String(tok).trim()) return true;
   const rows = (list as Record<string, unknown>).rooms;
   const count = roomCount(list);
-  return Array.isArray(rows) && count !== undefined && count > rows.length;
+  if (!Array.isArray(rows) || count === undefined) return false;
+  // Distinct rooms, so one room served on two pages never stands in for a room that was not read (Codex review, 11/27).
+  const ids = new Set<string>();
+  let noId = 0;
+  for (const r of rows) {
+    const o = r && typeof r === "object" ? (r as Record<string, unknown>) : {};
+    const id = typeof o.id === "string" || typeof o.id === "number" ? String(o.id).trim() : typeof o.room_id === "string" ? o.room_id.trim() : "";
+    if (id) ids.add(id);
+    else noId++;
+  }
+  return count > ids.size + noId;
 };
 
 /** Zoom's total_records as a whole number, or undefined when missing or in a shape that is not a count. */

@@ -571,8 +571,10 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     // Reported like any new room, with no comparison against the partial reading (Sonnet review, 11/27).
     if (before.list.unconfirmed && reading.fullList && previous.fullListAt) {
       add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
+      for (const k of reading.details.get(id)?.shared ?? []) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were read as one`);
       continue;
     }
+    // Confirmed by this full read with no full list saved before it: nothing to call it new against, so just compared.
     times.push(before.list.at);
     const was = before.list;
     if (was.name !== now_.name) add(nm, "changed", `Renamed from "${was.name}".`);
@@ -691,7 +693,8 @@ export const nextSnapshot = (reading: Reading, previous: Snapshot | null, accoun
     const before = prevRoom(previous, id);
     const detail = reading.details.get(id);
     // A room new since the last full list, seen only in a partial one, stays unconfirmed until a full read.
-    const unconfirmed = !reading.fullList && !!previous?.fullListAt && (before ? !!before.list.unconfirmed : true);
+    // Also when no full list was ever saved, so a room seen only in partial lists is never called removed (Codex, 11/27).
+    const unconfirmed = !reading.fullList && (before ? !!before.list.unconfirmed : true);
     rooms[id] = {
       list: { ...f, at, ...(unconfirmed ? { unconfirmed: true } : {}) },
       // Only what was actually read is saved; a part not read keeps its last reading (or stays unknown).

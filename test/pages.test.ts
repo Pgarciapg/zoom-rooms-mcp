@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HttpZoomRoomsClient, MAX_ROOM_PAGES, ROOM_PAGE_SIZE } from "../src/client.ts";
+import { HttpZoomRoomsClient, listIsPartial, MAX_ROOM_PAGES, ROOM_PAGE_SIZE } from "../src/client.ts";
 import { roomsNeedingAttention } from "../src/attention.ts";
 import { diagnoseRooms } from "../src/diagnose-rooms.ts";
 
@@ -137,11 +137,18 @@ test("review: the room count from page one survives a last page with no count", 
 });
 
 // Codex review of efdce73.
-test("review: a count that drops mid-paging uses the newer number", async (t) => {
+test("review: a count that drops mid-paging keeps the larger one, so the list reads partial, never all clear", async (t) => {
   const counted = (ids: string[], total: number, next = "") => () => new Response(JSON.stringify({ total_records: total, next_page_token: next, rooms: ids.map((id) => ({ id, name: id, status: "Available", health: "Healthy" })) }), { status: 200 });
   serve(t, [counted(["a"], 3, "t1"), counted(["b"], 2)]);
   const list = (await new HttpZoomRoomsClient(creds()).listRooms()) as any;
-  assert.equal(list.total_records, 2);
+  assert.equal(list.total_records, 3);
+  assert.equal(listIsPartial(list), true);
+});
+
+test("review: one room served on two pages does not stand in for an unread room", async (t) => {
+  const counted = (ids: string[], total: number, next = "") => () => new Response(JSON.stringify({ total_records: total, next_page_token: next, rooms: ids.map((id) => ({ id, name: id, status: "Available", health: "Healthy" })) }), { status: 200 });
+  serve(t, [counted(["a"], 2, "t1"), counted(["a"], 2)]);
+  assert.equal(listIsPartial(await new HttpZoomRoomsClient(creds()).listRooms()), true);
 });
 
 test("review: a last page with no token but fewer rooms than counted is partial in the attention and batch tools", async (t) => {
@@ -150,4 +157,6 @@ test("review: a last page with no token but fewer rooms than counted is partial 
   const client = new HttpZoomRoomsClient(creds());
   const att = await roomsNeedingAttention(client);
   assert.ok(att.couldNotCheck.some((n: string) => /more pages of rooms/.test(n)), JSON.stringify(att.couldNotCheck));
+  const batch = await diagnoseRooms(client);
+  assert.ok(batch.couldNotCheck.some((n: string) => /more pages of rooms/.test(n)), JSON.stringify(batch.couldNotCheck));
 });
