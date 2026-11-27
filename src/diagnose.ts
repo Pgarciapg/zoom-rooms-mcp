@@ -179,7 +179,9 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
   // Where the room is. A building without a floor (or the reverse) is shown but never used to group rooms.
   const building = isObj(loc) ? str(loc.building) : "";
   const floorName = isObj(loc) ? str(loc.floor) : "";
-  const locId = str(detail?.location_id) || str(listed?.location_id);
+  // Zoom's documented profile keeps the location code under `basic` too (Codex review, 11/24).
+  const profileLoc = str(detail?.location_id) || (isObj(detail?.basic) ? str(detail.basic.location_id) : "");
+  const locId = profileLoc || str(listed?.location_id);
   const locText = typeof loc === "string" ? str(loc) : "";
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
   if (building && floorName) {

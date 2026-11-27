@@ -371,3 +371,13 @@ test("review: the allocator still seats the earlier (worse) meeting when not eve
   assert.equal(got[1]!.moveTo.length, 0);
   assert.match(got[1]!.moveToNote ?? "", /suggested for A/);
 });
+
+// Codex review of cdd6d8e (MEDIUM, diagnose.ts:156): Zoom's documented profile keeps the location code under `basic`.
+test("review: a room whose list row has no code still finds rooms nearby by its profile's basic.location_id", async () => {
+  const client: ZoomRoomsClient = {
+    ...fake([{ id: "r1", name: "Board Room", status: "In Meeting", health: "Critical" }, row("r2", "Room 402", "Available", "Healthy", "L4")]),
+    getRoom: async () => ({ id: "r1", basic: { name: "Board Room", location_id: "L4" }, issues: [{ issue: "Camera disconnected", severity: "critical" }] }),
+  };
+  const d = await diagnoseRoom(client, "r1", NOW, undefined, undefined, { moveTo: true });
+  assert.deepEqual(d.moveTo?.rooms.map((r) => r.name), ["Room 402"]);
+});
