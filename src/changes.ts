@@ -568,7 +568,11 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       continue;
     }
     // First seen in a partial list after a full one: this full read confirms it is new (Codex review, 11/27).
-    if (before.list.unconfirmed && reading.fullList && previous.fullListAt) add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
+    // Reported like any new room, with no comparison against the partial reading (Sonnet review, 11/27).
+    if (before.list.unconfirmed && reading.fullList && previous.fullListAt) {
+      add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
+      continue;
+    }
     times.push(before.list.at);
     const was = before.list;
     if (was.name !== now_.name) add(nm, "changed", `Renamed from "${was.name}".`);
@@ -637,7 +641,9 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
   }
   for (const [id, before] of Object.entries(previous.rooms)) {
     if (reading.rooms.has(id)) continue;
-    if (reading.fullList) add(labelFor(id, before.list.name), "changed", "No longer in the account's room list (removed or renamed to a new id).");
+    // Seen once in a partial list and never confirmed: not called removed (Sonnet review, 11/27).
+    if (reading.fullList && before.list.unconfirmed) notCompared.push(`${before.list.name}: seen only in an earlier partial room list and not in this full one, so it is not called added or removed`);
+    else if (reading.fullList) add(labelFor(id, before.list.name), "changed", "No longer in the account's room list (removed or renamed to a new id).");
     else notCompared.push(`${before.list.name}: not in this check's room list, which was not read in full`);
   }
   const order: Record<Direction, number> = { worse: 0, changed: 1, better: 2 };

@@ -890,3 +890,33 @@ test("review: a room first seen in a partial list after a full one is reported n
   assert.equal(store.load()!.rooms.r9!.list.unconfirmed, undefined);
   assert.doesNotMatch((await call(c)).content[0]!.text, /Room Nine/);
 });
+
+// Sonnet review of d6a561c.
+test("review: an unconfirmed room missing from the next full list is not called removed", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  const rooms = state.rooms;
+  state.rooms = [...rooms, { id: "r9", name: "Room Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  await call(c);
+  state.rooms = rooms;
+  state.nextToken = "";
+  const text = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(text, /No longer in the account/, text);
+  assert.match(text, /Room Nine: seen only in an earlier partial room list/, text);
+});
+
+test("review: an unconfirmed room that also changed gets one 'New room' line", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [...state.rooms, { id: "r9", name: "Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  await call(c);
+  state.rooms[2] = { id: "r9", name: "Room Nine", status: "Offline", health: "Critical" };
+  state.nextToken = "";
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /Room Nine:\n- \[worse\] New room in the account \(Offline, Critical\)\.\n\n/, text);
+  assert.doesNotMatch(text, /Went offline|Renamed from|Health worse/, text);
+});
