@@ -160,3 +160,7 @@ test("review: a last page with no token but fewer rooms than counted is partial 
   const batch = await diagnoseRooms(client);
   assert.ok(batch.couldNotCheck.some((n: string) => /more pages of rooms/.test(n)), JSON.stringify(batch.couldNotCheck));
 });
+
+test("review: two copies of a row with a blank id and one room_id count as one room", () => {
+  assert.equal(listIsPartial({ total_records: 2, next_page_token: "", rooms: [{ id: "", room_id: "a" }, { id: "", room_id: "a" }] }), true);
+});

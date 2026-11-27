@@ -221,7 +221,9 @@ export const listIsPartial = (list: unknown): boolean => {
   let noId = 0;
   for (const r of rows) {
     const o = r && typeof r === "object" ? (r as Record<string, unknown>) : {};
-    const id = typeof o.id === "string" || typeof o.id === "number" ? String(o.id).trim() : typeof o.room_id === "string" ? o.room_id.trim() : "";
+    // A blank id falls back to room_id, like every tool's idOf (Codex review, 11/27).
+    const pick = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v).trim() : "");
+    const id = pick(o.id) || pick(o.room_id);
     if (id) ids.add(id);
     else noId++;
   }
