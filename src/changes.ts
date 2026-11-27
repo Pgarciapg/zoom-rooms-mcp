@@ -40,6 +40,10 @@ export interface RoomDetailFacts {
   issuesRead?: boolean;
   /** When the saved issues were last actually read, if earlier than `at` (kept because Zoom gave no issues list since). */
   issuesAt?: string;
+  /** Zoom's device id for each device key that has one (saved since 2026-11-27), so a renamed key still finds its device. */
+  ids?: Record<string, string>;
+  /** Keys that stand for more than one device: same name and type, and Zoom gave no device id to tell them apart. */
+  shared?: string[];
 }
 export interface RoomSnapshot {
   list: RoomListFacts & { at: string };
@@ -71,7 +75,9 @@ const validRoom = (r: unknown): boolean =>
     isObj(r.detail.down) && Object.values(r.detail.down).every(isStr) &&
     (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr))) &&
     (r.detail.issuesRead === undefined || typeof r.detail.issuesRead === "boolean") &&
-    (r.detail.issuesAt === undefined || isTime(r.detail.issuesAt))));
+    (r.detail.issuesAt === undefined || isTime(r.detail.issuesAt)) &&
+    (r.detail.ids === undefined || (isObj(r.detail.ids) && Object.values(r.detail.ids).every(isStr))) &&
+    (r.detail.shared === undefined || (Array.isArray(r.detail.shared) && r.detail.shared.every(isStr)))));
 export const isSnapshot = (x: unknown): x is Snapshot =>
   isObj(x) && x.version === 1 && isStr(x.account) && (x.fullListAt === null || isTime(x.fullListAt)) && isObj(x.rooms) && Object.values(x.rooms).every(validRoom);
 
@@ -219,17 +225,72 @@ const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDeta
     if (!byKey.has(issueKey(text))) byKey.set(issueKey(text), text);
   }
   const issues = [...byKey.values()].sort();
+  // A device is keyed "name (type)". Two devices with one name and type in the same room (two "Panel" controllers) are
+  // told apart by Zoom's device id, so one going offline while the other recovers is still a change (Codex review, 11/24).
+  const rows = rawDevices.map((d) => {
+    if (!isObj(d)) throw new Error("a device came back in a shape that could not be read");
+    const nm = deviceName(d) || "Unnamed device";
+    const type = str(d.device_type) || "device";
+    return { nm, type, base: `${nm} (${type})`, id: str(d.id) || str(d.device_id), status: str(d.status) };
+  });
+  const perBase = new Map<string, number>();
+  for (const r of rows) perBase.set(r.base, (perBase.get(r.base) ?? 0) + 1);
   const down: Record<string, string> = {};
   const seen = new Set<string>();
-  for (const d of rawDevices) {
-    if (!isObj(d)) throw new Error("a device came back in a shape that could not be read");
-    const status = str(d.status);
-    const name = `${deviceName(d) || "Unnamed device"} (${str(d.device_type) || "device"})`;
-    seen.add(name);
-    if (OK_DEVICE.test(status)) continue;
-    down[name] = status || "unknown";
+  const ids: Record<string, string> = {};
+  const shared = new Set<string>();
+  for (const r of rows) {
+    const key = (perBase.get(r.base) ?? 0) > 1 && r.id ? `${r.nm} (${r.type}, Zoom device ${r.id})` : r.base;
+    if (seen.has(key)) shared.add(key);
+    seen.add(key);
+    if (r.id && !shared.has(key)) ids[key] = r.id;
+    if (OK_DEVICE.test(r.status)) continue;
+    // A shared key is down when any of its devices is.
+    if (!(key in down)) down[key] = r.status || "unknown";
   }
-  return { issues, down, seen: [...seen].sort(), ...(issuesRead ? {} : { issuesRead: false }) };
+  for (const k of shared) delete ids[k];
+  return {
+    issues,
+    down,
+    seen: [...seen].sort(),
+    ...(issuesRead ? {} : { issuesRead: false }),
+    ...(Object.keys(ids).length ? { ids } : {}),
+    ...(shared.size ? { shared: [...shared].sort() } : {}),
+  };
+};
+
+/**
+ * Lines up last check's device keys with this check's before comparing. A device whose key changed (a second device
+ * with its name arrived, so both are now keyed by Zoom device id, or one left so the id is dropped again) is found by
+ * its saved id. A check saved before ids were kept cannot say which of two same-named devices was which: those are
+ * named once as not compared and start fresh, never reported as "was online" or "no longer listed".
+ */
+const carryIds = <T extends RoomDetailFacts>(was: T, now_: RoomDetailFacts): { was: T; skip: Set<string>; split: string[] } => {
+  const nowKeys = new Set([...Object.keys(now_.down), ...(now_.seen ?? [])]);
+  const oldKeys = new Set([...Object.keys(was.down), ...(was.seen ?? [])]);
+  const keyById = new Map(Object.entries(now_.ids ?? {}).map(([k, id]) => [id, k]));
+  const rename = new Map<string, string>();
+  for (const [k, id] of Object.entries(was.ids ?? {})) {
+    const to = keyById.get(id);
+    if (to && to !== k && !nowKeys.has(k)) rename.set(k, to);
+  }
+  const skip = new Set<string>();
+  const split: string[] = [];
+  const drop = new Set<string>();
+  for (const old of oldKeys) {
+    if (nowKeys.has(old) || rename.has(old) || !old.endsWith(")")) continue;
+    const stem = `${old.slice(0, -1)}, Zoom device `;
+    const parts = [...nowKeys].filter((k) => k.startsWith(stem) && !oldKeys.has(k) && ![...rename.values()].includes(k));
+    if (parts.length < 2) continue;
+    drop.add(old);
+    for (const p of parts) skip.add(p);
+    split.push(old);
+  }
+  if (!rename.size && !drop.size) return { was, skip, split };
+  const down: Record<string, string> = {};
+  for (const [k, s] of Object.entries(was.down)) if (!drop.has(k)) down[rename.get(k) ?? k] = s;
+  const seen = was.seen?.filter((k) => !drop.has(k)).map((k) => rename.get(k) ?? k);
+  return { was: { ...was, down, ...(seen ? { seen } : {}) }, skip, split };
 };
 
 /**
@@ -424,7 +485,10 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       } else if (detailNow.issues.length || Object.keys(detailNow.down).length) notCompared.push(`${now_.name}: its issues and devices were not read last time, so this is their first reading`);
       continue;
     }
-    detailWas = carryUnnamed(detailWas, detailNow);
+    const lined = carryIds(detailWas, detailNow);
+    detailWas = carryUnnamed(lined.was, detailNow);
+    for (const k of lined.split) notCompared.push(`${now_.name}: ${k.replace(/\)$/, "")}) now names more than one device; they are told apart by Zoom device id from this check on, so they were not compared this time`);
+    for (const k of new Set([...(detailNow.shared ?? []), ...(detailWas.shared ?? [])])) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were compared as one`);
     // One line for all such rooms, not one per room per check (Sonnet review, 11/25): on a live account it is all of them.
     if (detailWas.issuesRead === false || detailNow.issuesRead === false) issuesUnread.push(nm);
     else {
@@ -434,6 +498,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       for (const i of detailWas.issues) if (!nowKeys.has(issueKey(i))) add(nm, "better", `Issue closed: ${i}.`);
     }
     for (const [d, s] of Object.entries(detailNow.down)) {
+      if (lined.skip.has(d)) continue;
       const prev = detailWas.down[d];
       if (prev === undefined) add(nm, "worse", `${d}: ${s} (was online).`);
       else if (prev.toLowerCase() !== s.toLowerCase()) add(nm, "changed", `${d}: now ${s} (was ${prev}).`);

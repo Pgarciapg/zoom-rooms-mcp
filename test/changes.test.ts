@@ -513,3 +513,59 @@ test("review: a first check on a partial list words its notes for a first check"
   assert.match(text, /- Room list: more rooms exist than were read\n/);
   assert.doesNotMatch(text, /added or removed|not compared/);
 });
+
+// Codex review of cdd6d8e / b4974a8 (MEDIUM, changes.ts:153): two controllers with one name collapsed into one entry.
+const panel = (id: string | undefined, status: string) => ({ ...(id ? { id } : {}), device_hostname: "Panel", device_type: "Controller", status });
+test("review: two same-named controllers are told apart by Zoom device id; one dropping while the other recovers is reported", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("p1", "Offline"), panel("p2", "Online")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /\[worse\] Panel \(Controller, Zoom device p2\): Offline \(was online\)\./, text);
+  assert.match(text, /\[better\] Panel \(Controller, Zoom device p1\): back online \(was Offline\)\./, text);
+});
+
+test("review: a check saved before device ids were kept is not misread when a name now covers two devices", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel(undefined, "Offline")];
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  assert.deepEqual(store.load()!.rooms.r2!.detail!.down, { "Panel (Controller)": "Offline" });
+  state.devices.r2 = [panel("p1", "Offline"), panel("p2", "Online")];
+  const r = await call(c);
+  const text = r.content[0]!.text;
+  assert.doesNotMatch(text, /was online|no longer in the room's device list|back online/, text);
+  assert.match(text, /Panel \(Controller\) now names more than one device; they are told apart by Zoom device id from this check on/, text);
+  // The next check compares them one by one.
+  state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
+  const next = (await call(c)).content[0]!.text;
+  assert.match(next, /Zoom device p2\): Offline \(was online\)/, next);
+  assert.match(next, /Zoom device p1\): back online/, next);
+});
+
+test("review: a down device keeps its history when a second device with its name arrives, and when it leaves", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel("p1", "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [panel("p1", "Offline"), panel("p2", "Online")];
+  const joined = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(joined, /was online|no longer in the room's device list|back online/, joined);
+  state.devices.r2 = [panel("p1", "Offline")];
+  const left = (await call(c)).content[0]!.text;
+  assert.doesNotMatch(left, /was online|no longer in the room's device list|back online/, left);
+  state.devices.r2 = [panel("p1", "Online")];
+  assert.match((await call(c)).content[0]!.text, /\[better\] Panel \(Controller\): back online \(was Offline\)\./);
+});
+
+test("review: same-named devices with no Zoom id are compared as one and say so", async () => {
+  const { state, client } = fakeAccount();
+  state.devices.r2 = [panel(undefined, "Online"), panel(undefined, "Offline")];
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /more than one Panel \(Controller\) and Zoom gave no device id to tell them apart, so they were compared as one/, text);
+});
