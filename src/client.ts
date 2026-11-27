@@ -67,17 +67,21 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     const seen = new Set<string>();
     let token = "";
     let last: any = {};
+    // The largest room count any page gave, kept on the result: a last page that leaves it out never hides a count an
+    // earlier page gave (Codex review, 11/27).
+    let total: number | undefined;
+    const done = (extra: Record<string, unknown>) => ({ ...last, rooms, ...(total !== undefined ? { total_records: total } : {}), ...extra });
     for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
       const query = `page_size=${ROOM_PAGE_SIZE}${token ? `&next_page_token=${encodeURIComponent(token)}` : ""}`;
       // Past the first page, paging stops at the caller's deadline and returns what it has, marked not whole by the
       // kept token, so a slow Zoom still lets the tool answer before the MCP client gives up (Codex review, 11/25).
       if (page > 1 && opts.deadline !== undefined) {
         const left = opts.deadline - Date.now();
-        if (left <= 0) return { ...last, rooms, page_count: page - 1, next_page_token: token };
+        if (left <= 0) return done({ page_count: page - 1, next_page_token: token });
         try {
           last = await this.request(`/rooms?${query}`, Math.min(ZOOM_TIMEOUT_MS, left));
         } catch (error) {
-          if (error instanceof ZoomApiError && error.status === 504 && Date.now() >= opts.deadline - 50) return { ...last, rooms, page_count: page - 1, next_page_token: token };
+          if (error instanceof ZoomApiError && error.status === 504 && Date.now() >= opts.deadline - 50) return done({ page_count: page - 1, next_page_token: token });
           throw error;
         }
       } else {
@@ -86,6 +90,8 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
         if (left <= 0) throw new ZoomApiError(504, "Zoom was slow, so the room list was not read in time to answer.");
         last = await this.request(`/rooms?${query}`, Math.max(1, left));
       }
+      const count = roomCount(last);
+      if (count !== undefined) total = Math.max(total ?? 0, count);
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
       // A later page with no rooms list is a bad page, never the end of the list (Codex review, 11/25): read as the end,
@@ -94,11 +100,11 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
       // A room's activation_code can sign a device into the account; it is never needed here, so it never leaves this client.
       rooms.push(...(batch ?? []).map((r: unknown) => (r && typeof r === "object" && !Array.isArray(r) ? (({ activation_code: _code, ...rest }) => rest)(r as Record<string, unknown>) : r)));
       token = typeof (last as any)?.next_page_token === "string" ? (last as any).next_page_token : "";
-      if (!token) return { ...last, rooms, page_count: page, next_page_token: "" };
+      if (!token) return done({ page_count: page, next_page_token: "" });
       if (seen.has(token)) throw new ZoomApiError(502, `Zoom repeated a page token on page ${page} of the room list; stopped so rooms are not counted twice.`);
       seen.add(token);
     }
-    return { ...last, rooms, page_count: MAX_ROOM_PAGES, next_page_token: token };
+    return done({ page_count: MAX_ROOM_PAGES, next_page_token: token });
   }
 
   async getRoom(roomId: string) {
@@ -196,3 +202,10 @@ export class EarlierDemoZoomRoomsClient implements ZoomRoomsClient {
     return EARLIER_DEVICES[room.id] ?? new DemoZoomRoomsClient().getRoomDevices(roomId);
   }
 }
+
+/** Zoom's total_records as a whole number, or undefined when missing or in a shape that is not a count. */
+export const roomCount = (page: unknown): number | undefined => {
+  const v = page && typeof page === "object" ? (page as Record<string, unknown>).total_records : undefined;
+  const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+};

@@ -10,7 +10,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 export const LOCK_STALE_MS = 30_000;
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ZoomRoomsClient } from "./client.ts";
+import { roomCount, type ZoomRoomsClient } from "./client.ts";
 import { deviceName } from "./device-fields.ts";
 
 /** Rooms read in detail (issues and devices) per check: rooms that look unhappy now or did last time. */
@@ -413,8 +413,9 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   let fullList = !(isObj(list) && str((list as any).next_page_token));
   if (!fullList) couldNotCheck.push("Room list: more rooms exist than were read, so rooms are not called added or removed");
   // A last page with no token that still counts more rooms than were returned is not whole either (Codex review, 11/27).
-  const counted = isObj(list) ? Number((list as any).total_records) : NaN;
-  if (fullList && Number.isFinite(counted) && counted > rawRows.length) {
+  // Read safely: a count in an odd shape is ignored, never a crash (Codex review, 11/27).
+  const counted = roomCount(list);
+  if (fullList && counted !== undefined && counted > rawRows.length) {
     fullList = false;
     couldNotCheck.push(`Room list: Zoom counts ${counted} rooms but returned ${rawRows.length}, so rooms are not called added or removed`);
   }
@@ -441,7 +442,7 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   let emptyHeldAt: string | undefined;
   if (rooms.size === 0 && previous && Object.keys(previous.rooms).length) {
     // A page that says rooms exist (total_records above zero) is not a clean empty list (Codex review, 11/27).
-    const total = isObj(list) ? Number((list as any).total_records) : NaN;
+    const total = roomCount(list) ?? NaN;
     emptyList = fullList && rows.length === 0 && !(total > 0);
     const heldFor = previous.emptyListAt ? started - Date.parse(previous.emptyListAt) : NaN;
     const confirms = emptyList && heldFor >= EMPTY_CONFIRM_MIN_MS && heldFor <= EMPTY_CONFIRM_MAX_MS;
@@ -561,7 +562,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     const nm = labelFor(id, now_.name);
     if (!before) {
       if (previous.fullListAt && reading.fullList) add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
-      else notCompared.push(`${now_.name}: not in the last check's room list, which was not read in full, so it may not be new`);
+      else notCompared.push(`${now_.name}: not in the last check's room list, and ${previous.fullListAt ? "this check's list" : "that list"} was not read in full, so it may not be new`);
       for (const k of reading.details.get(id)?.shared ?? []) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were read as one`);
       continue;
     }

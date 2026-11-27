@@ -847,6 +847,29 @@ test("review: a down device whose Zoom id changes between reads stays one device
   const churn: ZoomRoomsClient = { ...client, getRoomDevices: async () => ({ devices: [{ id: `x${n++}`, name: "Mic", device_type: "Microphone", status: "Offline" }] }) };
   const c = await connect(churn, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
   await call(c);
-  const text = (await call(c)).content[0]!.text;
+  const r = await call(c);
+  const text = r.content[0]!.text;
+  assert.ok(!r.isError, text);
+  assert.match(text, /^(Nothing changed|No changes in what could be compared)/, text);
   assert.doesNotMatch(text, /Mic \(Microphone\)/, text);
+});
+
+// Codex review of 436202c.
+test("review: a room count in an odd shape is ignored, never a crash", async () => {
+  const { client } = fakeAccount();
+  const odd = { ...client, listRooms: async (o: any) => ({ ...((await client.listRooms(o)) as object), total_records: { toString: null, valueOf: null } }) } as ZoomRoomsClient;
+  const c = await connect(odd, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  const r = await call(c);
+  assert.ok(!r.isError, r.content[0]!.text);
+});
+
+test("review: a new room seen in a partial list blames this check's list when the last one was whole", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [state.rooms[0], { id: "r9", name: "Room Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /Room Nine: not in the last check's room list, and this check's list was not read in full/, text);
 });

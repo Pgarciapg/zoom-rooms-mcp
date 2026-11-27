@@ -127,3 +127,11 @@ test("review: a later page with no rooms list is an error, never the end of a co
   serve(t, [page(["a"], "t1"), () => new Response(JSON.stringify({}), { status: 200 })]);
   await assert.rejects(new HttpZoomRoomsClient(creds()).listRooms(), /page 2 of the room list without a rooms list/);
 });
+
+// Codex review of 436202c: a last page that leaves out total_records keeps the count an earlier page gave.
+test("review: the room count from page one survives a last page with no count", async (t) => {
+  const bare = (ids: string[]) => () => new Response(JSON.stringify({ next_page_token: "", rooms: ids.map((id) => ({ id, name: id, status: "Available" })) }), { status: 200 });
+  serve(t, [page(["a"], "t1"), bare(["b"])]);
+  const list = (await new HttpZoomRoomsClient(creds()).listRooms()) as any;
+  assert.equal(list.total_records, 5);
+});
