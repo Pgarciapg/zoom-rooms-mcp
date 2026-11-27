@@ -381,3 +381,12 @@ test("review: a room whose list row has no code still finds rooms nearby by its 
   const d = await diagnoseRoom(client, "r1", NOW, undefined, undefined, { moveTo: true });
   assert.deepEqual(d.moveTo?.rooms.map((r) => r.name), ["Room 402"]);
 });
+
+test("review: get_rooms_needing_attention also finds rooms nearby by the profile's basic.location_id", async () => {
+  const client: ZoomRoomsClient = {
+    ...fake([{ id: "r1", name: "Board Room", status: "In Meeting", health: "Critical" }, row("r2", "Room 402", "Available", "Healthy", "L4")]),
+    getRoom: async () => ({ id: "r1", basic: { name: "Board Room", location_id: "L4" }, issues: [{ issue: "Camera disconnected", severity: "critical" }] }),
+  };
+  const a = await roomsNeedingAttention(client, 15, NOW);
+  assert.deepEqual((a.rooms[0] as any).moveTo.map((r: any) => r.name), ["Room 402"]);
+});

@@ -145,7 +145,9 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const loc = detail?.location;
       const fromDetail = loc && typeof loc === "object" ? [str(loc.building), str(loc.floor)].filter(Boolean).join(", ") : typeof loc === "string" ? str(loc) : "";
       // A location code gets its name from Zoom's location tree (read once per call, only when needed).
-      const code = str(detail?.location_id) || str(r.location_id);
+      // Zoom's documented profile keeps the code under `basic`, read the same way as diagnose_room (Sonnet review, 11/27).
+      const profileCode = str(detail?.location_id) || (detail && typeof detail.basic === "object" && detail.basic ? str(detail.basic.location_id) : "");
+      const code = profileCode || str(r.location_id);
       const where = fromDetail || (code ? await places.name(code) : null);
       readOk.set(id, {
         // The profile's own status and health count too (Sonnet review, 11/26): a list row can lag behind it.
@@ -165,7 +167,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
       const inMeeting = /^\s*in ?meeting\s*$/i.test(str(r.status));
       // Where the meeting can go, from the room list already read (no extra Zoom call).
       const candidates = inMeeting
-        ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([str(detail?.location_id), str(r.location_id)].filter(Boolean)))
+        ? freeRoomsIn(rooms, new Set([id, str(r.room_id), str(detail?.room_id)].filter(Boolean)), new Set([profileCode, str(r.location_id)].filter(Boolean)))
         : [];
       return { id, name, level, health: str(r.health), where, inMeeting, ...base, next: nextStep(base, now), moveTo: candidates, moveToNote: null, moveToSize: null as RoomFit | null, seats: readCapacity(detail) };
   };
