@@ -25,8 +25,8 @@ export const DETAIL_CONCURRENCY = 5;
 export const DETAIL_BUDGET_MS = 40_000;
 /** An empty room list is confirmed only by a second empty read at least this long after the first... */
 export const EMPTY_CONFIRM_MIN_MS = 10 * 60_000;
-/** ...and no longer than this after it; an older held empty read starts the wait again. */
-export const EMPTY_CONFIRM_MAX_MS = 24 * 3_600_000;
+/** ...and no longer than this after it (a week, so a daily check still confirms); an older hold starts again. */
+export const EMPTY_CONFIRM_MAX_MS = 7 * 86_400_000;
 
 export interface RoomListFacts {
   name: string;
@@ -388,7 +388,9 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   let emptyList = false;
   let emptyHeldAt: string | undefined;
   if (rooms.size === 0 && previous && Object.keys(previous.rooms).length) {
-    emptyList = fullList && rows.length === 0;
+    // A page that says rooms exist (total_records above zero) is not a clean empty list (Codex review, 11/27).
+    const total = isObj(list) ? Number((list as any).total_records) : NaN;
+    emptyList = fullList && rows.length === 0 && !(total > 0);
     const heldFor = previous.emptyListAt ? started - Date.parse(previous.emptyListAt) : NaN;
     const confirms = emptyList && heldFor >= EMPTY_CONFIRM_MIN_MS && heldFor <= EMPTY_CONFIRM_MAX_MS;
     if (emptyList && heldFor >= 0 && heldFor < EMPTY_CONFIRM_MIN_MS) emptyHeldAt = previous.emptyListAt;
@@ -396,7 +398,7 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
       fullList = false;
       couldNotCheck.push(
         emptyList
-          ? "Room list: Zoom returned no rooms, though there were rooms last time; held back as a possible bad read (a lost permission or a different account also looks like this). If a check at least 10 minutes from the first empty one also finds none, the rooms are reported removed"
+          ? "Room list: Zoom returned no rooms, though there were rooms last time; held back as a possible bad read (a lost permission or a different account also looks like this). If a saved check 10 minutes to a week after the first saved empty one also finds none, the rooms are reported removed"
           : "Room list: Zoom returned no rooms, though there were rooms last time; treated as an incomplete read",
       );
     }
@@ -405,8 +407,9 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
     const before = prevRoom(previous, id);
     return unhappy(f) || (before && (unhappy(before.list) || (before.detail && (before.detail.issues.length || Object.keys(before.detail.down).length))));
   });
-  // Worst now first, so the cap drops the healthiest.
-  wanted.sort(([, a], [, b]) => (unhappy(b) ? 1 : 0) - (unhappy(a) ? 1 : 0));
+  // Worst now first (offline, then critical, then the rest), so the cap drops the healthiest (Codex review, 11/24).
+  const severity = (f: RoomListFacts) => (/^offline$/i.test(f.status) ? 3 : /^critical$/i.test(f.health) ? 2 : unhappy(f) ? 1 : 0);
+  wanted.sort(([, a], [, b]) => severity(b) - severity(a));
   const details = new Map<string, RoomDetailFacts>();
   const skippedDetail = wanted.slice(DETAIL_LIMIT).map(([, f]) => f.name);
   // A few rooms at a time, inside one time budget, so a slow Zoom still gets an answer back before the MCP client's
@@ -557,7 +560,8 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
         continue;
       }
       const prev = detailWas.down[d];
-      if (prev === undefined) add(nm, "worse", `${d}: ${s} (was online).`);
+      // A device the last check never listed was not online then; it is new (Codex review, 11/24 and 11/27).
+      if (prev === undefined) add(nm, "worse", detailWas.seen && !detailWas.seen.includes(d) ? `${d}: ${s} (new in the room's device list since the last check).` : `${d}: ${s} (was online).`);
       else if (prev.toLowerCase() !== s.toLowerCase()) add(nm, "changed", `${d}: now ${s} (was ${prev}).`);
     }
     // Back online only when the device is still listed; one that is gone from the list was never seen recover.

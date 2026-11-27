@@ -619,7 +619,7 @@ test("review: deleting the last rooms is reported once a second clean read in a 
   state.rooms = [];
   const first = (await call(c)).content[0]!.text;
   assert.doesNotMatch(first, /No longer in the account/);
-  assert.match(first, /If a check at least 10 minutes from the first empty one also finds none, the rooms are reported removed/);
+  assert.match(first, /If a saved check 10 minutes to a week after the first saved empty one also finds none, the rooms are reported removed/);
   // An immediate re-run does not confirm (Sonnet review, 11/27), and does not restart the wait.
   t += 5 * 60_000;
   mock.timers.setTime(t);
@@ -638,7 +638,7 @@ test("review: deleting the last rooms is reported once a second clean read in a 
   }
 });
 
-test("review: a held empty read older than a day does not confirm; the wait starts again", async () => {
+test("review: a held empty read older than a week does not confirm; the wait starts again", async () => {
   const { state, client } = fakeAccount();
   const store = new MemorySnapshotStore();
   const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
@@ -646,7 +646,7 @@ test("review: a held empty read older than a day does not confirm; the wait star
   state.rooms = [];
   await call(c);
   const s = store.load()!;
-  const old = new Date(Date.now() - 3 * DAY).toISOString();
+  const old = new Date(Date.now() - 9 * DAY).toISOString();
   s.emptyListAt = old;
   store.save(s);
   assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
@@ -676,4 +676,52 @@ test("review: an empty page that still has a next-page token never confirms a de
   state.nextToken = "more";
   await call(c);
   assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
+});
+
+// Codex review of af2032a.
+const twoEmptyReads = async (listRooms: ZoomRoomsClient["listRooms"]) => {
+  const { state, client } = fakeAccount();
+  let t = NOW;
+  const c = await connect({ ...client, listRooms: async (o) => (state.rooms.length ? client.listRooms(o) : listRooms(o)) }, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct", now: () => t });
+  mock.timers.enable({ apis: ["Date"], now: NOW });
+  try {
+    await call(c);
+    state.rooms = [];
+    await call(c);
+    t += 11 * 60_000;
+    mock.timers.setTime(t);
+    return (await call(c)).content[0]!.text;
+  } finally {
+    mock.timers.reset();
+  }
+};
+test("review: an empty page that still counts rooms (total_records) never confirms a deletion", async () => {
+  assert.doesNotMatch(await twoEmptyReads(async () => ({ rooms: [], total_records: 2, next_page_token: "" })), /No longer in the account/);
+});
+test("review: two empty pages with a next-page token 11 minutes apart never confirm a deletion", async () => {
+  assert.doesNotMatch(await twoEmptyReads(async () => ({ rooms: [], next_page_token: "more" })), /No longer in the account/);
+});
+test("review: the same two empty reads with no count and no token do confirm it", async () => {
+  assert.match(await twoEmptyReads(async () => ({ rooms: [], next_page_token: "" })), /No longer in the account/);
+});
+
+test("review: a device the last check never listed that first shows Offline is new, not 'was online'", async () => {
+  const { state, client } = fakeAccount();
+  const c = await connect(client, { snapshots: new MemorySnapshotStore(), source: "zoom", account: "acct" });
+  await call(c);
+  state.devices.r2 = [...state.devices.r2!, { name: "Rear Camera", device_type: "Camera", status: "Offline" }];
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /\[worse\] Rear Camera \(Camera\): Offline \(new in the room's device list since the last check\)\./, text);
+  assert.doesNotMatch(text, /Rear Camera.*was online/);
+});
+
+test("review: an Offline room behind 25 Warning rooms is still read in detail", async () => {
+  const { state, client } = fakeAccount();
+  const read: string[] = [];
+  const spy: ZoomRoomsClient = { ...client, getRoomDevices: async (id) => (read.push(id), client.getRoomDevices(id)) };
+  state.rooms = [...Array.from({ length: 25 }, (_, i) => ({ id: `w${i}`, name: `Warn ${i}`, status: "Available", health: "Warning" })), { id: "off", name: "Down Room", status: "Offline", health: "Critical" }];
+  const reading = await readAccount(spy, null);
+  assert.ok(read.includes("off"), "the Offline room was read");
+  assert.ok(reading.skippedDetail.includes("Warn 24") || reading.skippedDetail.length === 1);
+  assert.ok(!reading.skippedDetail.includes("Down Room"));
 });
