@@ -67,8 +67,8 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
     const seen = new Set<string>();
     let token = "";
     let last: any = {};
-    // The largest room count any page gave, kept on the result: a last page that leaves it out never hides a count an
-    // earlier page gave (Codex review, 11/27).
+    // The latest room count any page gave, kept on the result: a last page that leaves it out never hides a count an
+    // earlier page gave, and a count that drops mid-paging (a room deleted) uses the newer number (Codex reviews, 11/27).
     let total: number | undefined;
     const done = (extra: Record<string, unknown>) => ({ ...last, rooms, ...(total !== undefined ? { total_records: total } : {}), ...extra });
     for (let page = 1; page <= MAX_ROOM_PAGES; page++) {
@@ -91,7 +91,7 @@ export class HttpZoomRoomsClient implements ZoomRoomsClient {
         last = await this.request(`/rooms?${query}`, Math.max(1, left));
       }
       const count = roomCount(last);
-      if (count !== undefined) total = Math.max(total ?? 0, count);
+      if (count !== undefined) total = count;
       const batch = (last as any)?.rooms;
       if (batch != null && !Array.isArray(batch)) throw new ZoomApiError(502, `Zoom returned page ${page} of the room list in an unexpected shape.`);
       // A later page with no rooms list is a bad page, never the end of the list (Codex review, 11/25): read as the end,
@@ -202,6 +202,20 @@ export class EarlierDemoZoomRoomsClient implements ZoomRoomsClient {
     return EARLIER_DEVICES[room.id] ?? new DemoZoomRoomsClient().getRoomDevices(roomId);
   }
 }
+
+/**
+ * True when a room list is not whole: Zoom kept a next-page token, or its room count is above the rows returned.
+ * Every tool reads the list through this, so a short last page never passes for a whole account (Codex review, 11/27).
+ */
+export const listIsPartial = (list: unknown): boolean => {
+  if (!list || typeof list !== "object" || Array.isArray(list)) return false;
+  const tok = (list as Record<string, unknown>).next_page_token;
+  // Read like every tool's str(): a number counts as a token, as before.
+  if ((typeof tok === "string" || typeof tok === "number") && String(tok).trim()) return true;
+  const rows = (list as Record<string, unknown>).rooms;
+  const count = roomCount(list);
+  return Array.isArray(rows) && count !== undefined && count > rows.length;
+};
 
 /** Zoom's total_records as a whole number, or undefined when missing or in a shape that is not a count. */
 export const roomCount = (page: unknown): number | undefined => {

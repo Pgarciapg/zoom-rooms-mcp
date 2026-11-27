@@ -873,3 +873,20 @@ test("review: a new room seen in a partial list blames this check's list when th
   const text = (await call(c)).content[0]!.text;
   assert.match(text, /Room Nine: not in the last check's room list, and this check's list was not read in full/, text);
 });
+
+// Codex review of efdce73: a room first seen in a partial list is still reported added by the next full read.
+test("review: a room first seen in a partial list after a full one is reported new at the next full read", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [...state.rooms, { id: "r9", name: "Room Nine", status: "Available", health: "Healthy" }];
+  state.nextToken = "more";
+  await call(c);
+  await call(c);
+  state.nextToken = "";
+  const text = (await call(c)).content[0]!.text;
+  assert.match(text, /Room Nine:\n- \[changed\] New room in the account \(Available, Healthy\)\./, text);
+  assert.equal(store.load()!.rooms.r9!.list.unconfirmed, undefined);
+  assert.doesNotMatch((await call(c)).content[0]!.text, /Room Nine/);
+});

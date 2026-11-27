@@ -135,3 +135,19 @@ test("review: the room count from page one survives a last page with no count", 
   const list = (await new HttpZoomRoomsClient(creds()).listRooms()) as any;
   assert.equal(list.total_records, 5);
 });
+
+// Codex review of efdce73.
+test("review: a count that drops mid-paging uses the newer number", async (t) => {
+  const counted = (ids: string[], total: number, next = "") => () => new Response(JSON.stringify({ total_records: total, next_page_token: next, rooms: ids.map((id) => ({ id, name: id, status: "Available", health: "Healthy" })) }), { status: 200 });
+  serve(t, [counted(["a"], 3, "t1"), counted(["b"], 2)]);
+  const list = (await new HttpZoomRoomsClient(creds()).listRooms()) as any;
+  assert.equal(list.total_records, 2);
+});
+
+test("review: a last page with no token but fewer rooms than counted is partial in the attention and batch tools", async (t) => {
+  const bare = (ids: string[]) => () => new Response(JSON.stringify({ next_page_token: "", rooms: ids.map((id) => ({ id, name: id, status: "Available", health: "Healthy" })) }), { status: 200 });
+  serve(t, [page(["a"], "t1"), bare(["b"])]);
+  const client = new HttpZoomRoomsClient(creds());
+  const att = await roomsNeedingAttention(client);
+  assert.ok(att.couldNotCheck.some((n: string) => /more pages of rooms/.test(n)), JSON.stringify(att.couldNotCheck));
+});

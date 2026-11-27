@@ -50,7 +50,8 @@ export interface RoomDetailFacts {
   shared?: string[];
 }
 export interface RoomSnapshot {
-  list: RoomListFacts & { at: string };
+  /** `unconfirmed`: first seen in a partial list after a full one, so the next full read still reports it added. */
+  list: RoomListFacts & { at: string; unconfirmed?: boolean };
   detail?: RoomDetailFacts & { at: string };
 }
 export interface Snapshot {
@@ -76,7 +77,7 @@ const isObj = (v: unknown): v is Record<string, any> => v !== null && typeof v =
 const isStr = (v: unknown): v is string => typeof v === "string";
 const isTime = (v: unknown) => isStr(v) && !Number.isNaN(Date.parse(v));
 const validRoom = (r: unknown): boolean =>
-  isObj(r) && isObj(r.list) && isStr(r.list.name) && isStr(r.list.status) && isStr(r.list.health) && isTime(r.list.at) &&
+  isObj(r) && isObj(r.list) && isStr(r.list.name) && isStr(r.list.status) && isStr(r.list.health) && isTime(r.list.at) && (r.list.unconfirmed === undefined || typeof r.list.unconfirmed === "boolean") &&
   (r.detail === undefined || (isObj(r.detail) && isTime(r.detail.at) && Array.isArray(r.detail.issues) && r.detail.issues.every(isStr) &&
     isObj(r.detail.down) && Object.values(r.detail.down).every(isStr) &&
     (r.detail.seen === undefined || (Array.isArray(r.detail.seen) && r.detail.seen.every(isStr))) &&
@@ -566,6 +567,8 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
       for (const k of reading.details.get(id)?.shared ?? []) notCompared.push(`${now_.name}: more than one ${k} and Zoom gave no device id to tell them apart, so they were read as one`);
       continue;
     }
+    // First seen in a partial list after a full one: this full read confirms it is new (Codex review, 11/27).
+    if (before.list.unconfirmed && reading.fullList && previous.fullListAt) add(nm, unhappy(now_) ? "worse" : "changed", `New room in the account (${now_.status}, ${now_.health}).`);
     times.push(before.list.at);
     const was = before.list;
     if (was.name !== now_.name) add(nm, "changed", `Renamed from "${was.name}".`);
@@ -681,8 +684,10 @@ export const nextSnapshot = (reading: Reading, previous: Snapshot | null, accoun
   for (const [id, f] of reading.rooms) {
     const before = prevRoom(previous, id);
     const detail = reading.details.get(id);
+    // A room new since the last full list, seen only in a partial one, stays unconfirmed until a full read.
+    const unconfirmed = !reading.fullList && !!previous?.fullListAt && (before ? !!before.list.unconfirmed : true);
     rooms[id] = {
-      list: { ...f, at },
+      list: { ...f, at, ...(unconfirmed ? { unconfirmed: true } : {}) },
       // Only what was actually read is saved; a part not read keeps its last reading (or stays unknown).
       ...(detail ? { detail: { ...keepIssues(detail, before?.detail), at } } : before?.detail ? { detail: structuredClone(before.detail) } : {}),
     };

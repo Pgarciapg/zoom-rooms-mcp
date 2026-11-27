@@ -4,7 +4,7 @@
 // Zoom gives only as a location code. Anything it
 // could not read is listed apart, and it never reports all clear while something could not be read.
 import { alertsNote, devicesClearLine } from "./all-clear.ts";
-import type { ZoomRoomsClient } from "./client.ts";
+import { listIsPartial, type ZoomRoomsClient } from "./client.ts";
 import { PlaceNamer } from "./locations.ts";
 import { allocateMoveTo, cleanName, sizeWords, freeRoomsIn, lookUpFits, readCapacity, type RoomFit } from "./move-to.ts";
 import { ago } from "./ago.ts";
@@ -111,7 +111,7 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
   try {
     const list = await client.listRooms();
     rooms = roomsOf(list);
-    if (str((list as any)?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
+    if (listIsPartial(list)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { summary: `Could not read the room list: ${reason}`, total: 0, needAttention: 0, counts: { critical: 0, warning: 0 }, rooms: [], notReadInDetail: [], couldNotCheck: [`Room list: ${reason}`], allClear: false, devicesClear: false, placeNote: null };

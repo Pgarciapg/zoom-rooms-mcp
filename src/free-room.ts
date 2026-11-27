@@ -4,7 +4,7 @@
 // profile. With a meeting size, rooms that fit come first, smallest first (so a big room is not used for a small meeting).
 // It only reads: nothing is booked. Zoom's room list says whether a room is in a meeting now, not whether it is booked
 // later, so the answer says to check the room's calendar before taking it.
-import type { ZoomRoomsClient } from "./client.ts";
+import { listIsPartial, type ZoomRoomsClient } from "./client.ts";
 import { cleanName, FIT_LOOKUP_LIMIT, freeRoomsIn, isFreeNow, lookUpFits, type Fit } from "./move-to.ts";
 import { findPlace } from "./locations.ts";
 
@@ -48,7 +48,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
     const raw: unknown[] = Array.isArray(all) ? all : Array.isArray(all?.rooms) ? all.rooms : [];
     rooms = raw.filter(isObj);
     if (rooms.length < raw.length) couldNotCheck.push(`Room list: ${plural(raw.length - rooms.length, "entry", "entries")} could not be read.`);
-    if (str(all?.next_page_token)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read, so a free room may be missing.");
+    if (listIsPartial(all)) couldNotCheck.push("Room list: Zoom has more pages of rooms than were read, so a free room may be missing.");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     return { ...base, summary: `Could not read the room list, so no free room can be named: ${reason}.`, couldNotCheck: [`Room list: ${reason}`] };

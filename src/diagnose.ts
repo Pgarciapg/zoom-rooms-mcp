@@ -7,7 +7,7 @@
 import { deviceStep, levelOf, type RoomIssue } from "./attention.ts";
 import { PlaceNamer } from "./locations.ts";
 import { besideRoom, cleanName, FIT_LOOKUP_LIMIT, readCapacity, FIT_ORDER, freeRoomsIn, lookUpFits, MOVE_TO_LIMIT, readAttendees, type RoomFit } from "./move-to.ts";
-import type { ZoomRoomsClient } from "./client.ts";
+import { listIsPartial, type ZoomRoomsClient } from "./client.ts";
 import { ago } from "./ago.ts";
 import { deviceFirmware, deviceName } from "./device-fields.ts";
 
@@ -147,7 +147,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
     try {
       const all = (await client.listRooms()) as any;
       const rooms = Array.isArray(all) ? all : arr(all?.rooms);
-      roomList = { rooms, partial: typeof all?.next_page_token === "string" && !!all.next_page_token };
+      roomList = { rooms, partial: listIsPartial(all) };
       listed = rooms.find((r) => isObj(r) && (str(r.id) === roomId || str(r.room_id) === roomId)) ?? null;
       if (!listed && detail) couldNotCheck.push(`Status and health: room ${roomId} is not in the room list.`);
     } catch (error) {
@@ -314,7 +314,7 @@ export const diagnoseRoom = async (client: ZoomRoomsClient, roomId: string, now 
       if (roomListError) throw new Error(roomListError);
       if (!roomList) {
         const all = (await client.listRooms()) as any;
-        roomList = { rooms: Array.isArray(all) ? all : arr(all?.rooms), partial: typeof all?.next_page_token === "string" && !!all.next_page_token };
+        roomList = { rooms: Array.isArray(all) ? all : arr(all?.rooms), partial: listIsPartial(all) };
       }
       const self = new Set([roomId, room.id, str(detail?.room_id), str(listed?.room_id)].filter(Boolean));
       // The room's location codes: from its detail and its row in the list (a detail with building and floor text often
