@@ -140,6 +140,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   // A free room with no Zoom id can't be listed by id, but it is free: named here, so "no room is free" is never said
   // over it (Codex review, 11/24).
   // The named room itself is said on its own, never again here (Sonnet review, 11/27).
+  const readGaps = couldNotCheck.length;
   const idless = rooms.filter((r): r is Record<string, unknown> => isObj(r) && r !== nearRow && !str(r.id) && !str(r.room_id) && locations.has(str(r.location_id)) && isFreeNow(r));
   for (const r of idless.filter((r) => cleanName(str(r.name)))) couldNotCheck.push(`${cleanName(str(r.name))}: looks free but has no Zoom id, so it is not listed; check it in Zoom.`);
   const nameless = idless.filter((r) => !cleanName(str(r.name))).length;
@@ -152,7 +153,9 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
   if (near && nearFree) itself = `${near.name} itself is ${nearNoHealth ? `free right now${nearNoHealth}` : "free and healthy right now"}${await ownFit(near)}. `;
   if (!free.length) {
     // The named room itself free is still a room to check the calendar of (Codex review, 11/25).
-    const summary = `${itself}No ${itself ? "other " : ""}room is free and healthy${where} right now in Zoom's room list.${couldNotCheck.length ? " Not everything could be read, so this may be incomplete." : ""}${itself ? `\n\n${CALENDAR}` : ""}`;
+    // An id-less free room is said in the first line too, never only under "could not check" (Codex review, 11/27).
+    const idlessWords = idless.length ? ` ${idless.length === 1 ? "1 room without a Zoom id looks" : `${idless.length} rooms without a Zoom id look`} free (named below); check ${idless.length === 1 ? "it" : "them"} in Zoom.` : "";
+    const summary = `${itself}No ${itself ? "other " : ""}room${idless.length ? " with a Zoom id" : ""} is free and healthy${where} right now in Zoom's room list.${idlessWords}${readGaps ? " Not everything could be read, so this may be incomplete." : ""}${itself ? `\n\n${CALENDAR}` : ""}`;
     return { ...base, near: nearOut, ...placeOut, summary, couldNotCheck };
   }
 

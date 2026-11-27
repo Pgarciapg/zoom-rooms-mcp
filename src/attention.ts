@@ -158,7 +158,8 @@ export const roomsNeedingAttention = async (client: ZoomRoomsClient, limit = DET
           (detail.issues == null || Array.isArray(detail.issues)) &&
           (!str(detail.status) || UP_STATUS.test(str(detail.status))) &&
           (!str(detail.health) || /^healthy$/i.test(str(detail.health))),
-        noAlerts: !!detail && typeof detail === "object" && !("issues" in detail),
+        // `issues: null` is no list either, never "no alerts" (Codex review, 11/27).
+        noAlerts: !!detail && typeof detail === "object" && (!("issues" in detail) || detail.issues === null),
       });
       const issues: RoomIssue[] = arr(detail?.issues).map((i) => ({ issue: str(i.issue ?? i.description ?? i.name), severity: str(i.severity), since: i.since ? str(i.since) : null, age: i.since ? ago(str(i.since), now) : null }));
       const bad = devices.filter((d) => !OK_DEVICE.test(str(d.status))).map((d) => `${deviceName(d) || "Device"} (${str(d.device_type) || "device"}): ${str(d.status) || "no status"}`);

@@ -87,3 +87,9 @@ test("diagnose_rooms: profiles with issues: null still give the devices-clear an
   assert.equal(d.allClear, false);
   assert.equal(d.devicesClear, true, d.summary);
 });
+
+test("get_rooms_needing_attention: issues: null is alerts unread, never a full all-clear", async () => {
+  const d: any = await roomsNeedingAttention(live(3, { getRoom: async (id) => ({ id, basic: { name: id }, issues: null }) }), 15, NOW);
+  assert.equal(d.allClear, false, d.summary);
+  assert.equal(d.devicesClear, true, d.summary);
+});

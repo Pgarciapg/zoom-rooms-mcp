@@ -289,7 +289,7 @@ test("review: an account whose only free room has no Zoom id never gets a flat '
   const rooms = [room("b", "Board Room", "L4", "In Meeting"), { name: "Nook", status: "Available", health: "Healthy", location_id: "L4" }];
   const r = await findFreeRoom(fake(rooms), {});
   assert.ok(r.couldNotCheck.some((n: string) => /^Nook: looks free but has no Zoom id/.test(n)), JSON.stringify(r.couldNotCheck));
-  assert.match(r.summary, /Not everything could be read, so this may be incomplete/);
+  assert.match(r.summary, /^No room with a Zoom id is free and healthy right now in Zoom's room list\. 1 room without a Zoom id looks free \(named below\); check it in Zoom\.$/, r.summary);
 });
 
 // Sonnet review of 4903fa3.
