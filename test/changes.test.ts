@@ -577,7 +577,7 @@ test("review: a second same-named device that arrives down is reported, even whe
   await call(c);
   state.devices.r2 = [panel("p1", "Online"), panel("p2", "Offline")];
   const text = (await call(c)).content[0]!.text;
-  assert.match(text, /\[worse\] Panel \(Controller, Zoom device p2\): Offline \(at the last check this name was one device, online/, text);
+  assert.match(text, /\[worse\] Panel \(Controller, Zoom device p2\): Offline \(at the last check this name read as one device, online/, text);
 });
 
 test("review: a down device under an old shared key that recovers alongside a new twin reads as back online", async () => {
@@ -611,18 +611,46 @@ test("review: the shared-name note is said once, not on every check", async () =
 test("review: deleting the last rooms is reported once a second clean read in a row also finds none", async () => {
   const { state, client } = fakeAccount();
   const store = new MemorySnapshotStore();
-  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  let t = NOW;
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct", now: () => t });
+  mock.timers.enable({ apis: ["Date"], now: NOW });
+  try {
   await call(c);
   state.rooms = [];
   const first = (await call(c)).content[0]!.text;
   assert.doesNotMatch(first, /No longer in the account/);
-  assert.match(first, /If the next check also finds none, the rooms are reported removed/);
+  assert.match(first, /If a check at least 10 minutes from the first empty one also finds none, the rooms are reported removed/);
+  // An immediate re-run does not confirm (Sonnet review, 11/27), and does not restart the wait.
+  t += 5 * 60_000;
+  mock.timers.setTime(t);
+  assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
+  assert.equal(store.load()!.emptyListAt, new Date(NOW).toISOString());
+  t += 6 * 60_000;
+  mock.timers.setTime(t);
   const second = (await call(c)).content[0]!.text;
   assert.match(second, /Room One:\n- \[changed\] No longer in the account's room list/, second);
   assert.match(second, /Room Two:\n- \[changed\] No longer in the account's room list/, second);
   assert.equal(Object.keys(store.load()!.rooms).length, 0);
   assert.equal(store.load()!.emptyListAt, undefined);
   assert.match((await call(c)).content[0]!.text, /^Nothing changed/);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("review: a held empty read older than a day does not confirm; the wait starts again", async () => {
+  const { state, client } = fakeAccount();
+  const store = new MemorySnapshotStore();
+  const c = await connect(client, { snapshots: store, source: "zoom", account: "acct" });
+  await call(c);
+  state.rooms = [];
+  await call(c);
+  const s = store.load()!;
+  const old = new Date(Date.now() - 3 * DAY).toISOString();
+  s.emptyListAt = old;
+  store.save(s);
+  assert.doesNotMatch((await call(c)).content[0]!.text, /No longer in the account/);
+  assert.notEqual(store.load()!.emptyListAt, old);
 });
 
 test("review: an empty read between two full ones does not confirm a later empty read", async () => {

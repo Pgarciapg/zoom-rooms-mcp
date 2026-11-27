@@ -23,6 +23,10 @@ export const DETAIL_CONCURRENCY = 5;
  * last saved reading.
  */
 export const DETAIL_BUDGET_MS = 40_000;
+/** An empty room list is confirmed only by a second empty read at least this long after the first... */
+export const EMPTY_CONFIRM_MIN_MS = 10 * 60_000;
+/** ...and no longer than this after it; an older held empty read starts the wait again. */
+export const EMPTY_CONFIRM_MAX_MS = 24 * 3_600_000;
 
 export interface RoomListFacts {
   name: string;
@@ -206,6 +210,8 @@ export interface Reading {
   skippedDetail: string[];
   /** True when a clean, complete read found no rooms though the last check had rooms. */
   emptyList?: boolean;
+  /** When the held empty read still waiting for its confirmation started (kept, so the wait is not restarted). */
+  emptyHeldAt?: string;
 }
 
 const readDetail = async (client: ZoomRoomsClient, id: string): Promise<RoomDetailFacts> => {
@@ -377,14 +383,20 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
   // An empty list where there were rooms last time is more likely a bad read than a deleted account, so the first one
   // is held back. A second clean empty read in a row confirms it, and the rooms are reported removed (Codex review,
   // 11/25: deleting the last room was otherwise never reported).
+  // The confirming read must come 10 minutes to a day after the first (Sonnet review, 11/27), so an immediate re-run
+  // never confirms a removal that a lost permission or a wrong account produced, and a week-old hold never does either.
   let emptyList = false;
+  let emptyHeldAt: string | undefined;
   if (rooms.size === 0 && previous && Object.keys(previous.rooms).length) {
     emptyList = fullList && rows.length === 0;
-    if (!(emptyList && previous.emptyListAt)) {
+    const heldFor = previous.emptyListAt ? started - Date.parse(previous.emptyListAt) : NaN;
+    const confirms = emptyList && heldFor >= EMPTY_CONFIRM_MIN_MS && heldFor <= EMPTY_CONFIRM_MAX_MS;
+    if (emptyList && heldFor >= 0 && heldFor < EMPTY_CONFIRM_MIN_MS) emptyHeldAt = previous.emptyListAt;
+    if (!confirms) {
       fullList = false;
       couldNotCheck.push(
         emptyList
-          ? "Room list: Zoom returned no rooms, though there were rooms last time; held back as a possible bad read. If the next check also finds none, the rooms are reported removed"
+          ? "Room list: Zoom returned no rooms, though there were rooms last time; held back as a possible bad read (a lost permission or a different account also looks like this). If a check at least 10 minutes from the first empty one also finds none, the rooms are reported removed"
           : "Room list: Zoom returned no rooms, though there were rooms last time; treated as an incomplete read",
       );
     }
@@ -429,7 +441,7 @@ export const readAccount = async (client: ZoomRoomsClient, previous: Snapshot | 
     if (failed.has(id)) couldNotCheck.push(`${f.name}: issues and devices could not be read (${failed.get(id)})`);
     else couldNotCheck.push(`${f.name}: issues and devices not read; Zoom was slow, so room details stopped after ${Math.max(0, Math.round(budgetMs / 1000))} s to answer in time`);
   }
-  return { rooms, details, fullList, couldNotCheck, skippedDetail, ...(emptyList ? { emptyList } : {}) };
+  return { rooms, details, fullList, couldNotCheck, skippedDetail, ...(emptyList ? { emptyList } : {}), ...(emptyHeldAt ? { emptyHeldAt } : {}) };
 };
 
 // ---------- comparing ----------
@@ -541,7 +553,7 @@ export const compare = (reading: Reading, previous: Snapshot | null, now: number
     for (const [d, s] of Object.entries(detailNow.down)) {
       if (lined.skip.has(d)) continue;
       if (lined.fresh.has(d)) {
-        add(nm, "worse", `${d}: ${s} (at the last check this name was one device, online; Zoom now lists more than one).`);
+        add(nm, "worse", `${d}: ${s} (at the last check this name read as one device, online; Zoom now lists more than one).`);
         continue;
       }
       const prev = detailWas.down[d];
@@ -615,7 +627,7 @@ export const nextSnapshot = (reading: Reading, previous: Snapshot | null, accoun
     account,
     fullListAt: reading.fullList ? at : previous?.fullListAt ?? null,
     // Kept from the first empty read, so the confirming read is the next one with no rooms.
-    ...(reading.emptyList && !reading.fullList ? { emptyListAt: previous?.emptyListAt ?? at } : {}),
+    ...(reading.emptyList && !reading.fullList ? { emptyListAt: reading.emptyHeldAt ?? at } : {}),
     rooms,
   };
 };
