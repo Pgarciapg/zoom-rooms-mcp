@@ -90,7 +90,7 @@ export const findFreeRoom = async (client: ZoomRoomsClient, opts: { attendees?: 
       placeRead = found.read;
       if (found.problem) couldNotCheck.push(`Places: ${found.problem}, so a place by that name may be missed or incomplete.`);
       if (found.places.length > 1) {
-        const labels = found.places.map((p) => p.label).sort();
+        const labels = found.places.map((p) => cleanName(p.label)).sort();
         // One label for several places ("Building 1, 2nd Floor" on two campuses): suggest each one's location code,
         // never the same ambiguous label again (Codex review, 11/24).
         if (new Set(labels.map(squash)).size < labels.length) {

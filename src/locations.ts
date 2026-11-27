@@ -181,7 +181,7 @@ export const findPlace = async (
       codes: roomCodes.filter((c) => ancestors(c).includes(id)),
       id,
       // The levels above the label (campus, city, country), to tell two same-named places apart.
-      within: ancestors(id).slice(1).map((a) => tree.get(a)!.name).filter(Boolean).filter((n) => !(placeName(tree, id).name ?? "").includes(n)).join(", "),
+      within: ancestors(id).slice(1).map((a) => tree.get(a)!.name).filter(Boolean).filter((n) => !(placeName(tree, id).name ?? "").split(", ").includes(n)).join(", "),
     }))
     .filter((p) => p.codes.length > 0);
   return { places, read: true, problem };
